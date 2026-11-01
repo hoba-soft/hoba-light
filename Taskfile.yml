@@ -1,0 +1,60 @@
+version: '3'
+
+vars:
+  VERSION: '{{default "0.0.0" .VERSION}}'
+  COMMIT:
+    sh: git rev-parse HEAD
+  LDFLAGS: >-
+    -X github.com/hoba-soft/hoba-light/internal/hobalight.BuildVersion={{.VERSION}}
+    -X github.com/hoba-soft/hoba-light/internal/hobalight.BuildCommit={{.COMMIT}}
+  GOEXE:
+    sh: go env GOEXE
+  GOOS:
+    sh: go env GOOS
+  GOARCH:
+    sh: go env GOARCH
+  RACE_FLAG: '{{if not (and (eq .GOOS "windows") (eq .GOARCH "arm64"))}}-race{{end}}'
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  build:
+    desc: Build hobalight and hl executables into bin/
+    cmds:
+      - go build -trimpath -ldflags "{{.LDFLAGS}}" -o bin/hobalight{{.GOEXE}} ./cmd/hobalight
+      - go build -trimpath -ldflags "{{.LDFLAGS}}" -o bin/hl{{.GOEXE}} ./cmd/hobalight
+
+  package:
+    desc: Build a portable archive and native installers (requires packaging tools)
+    cmds:
+      - go run ./tools/package --version "{{.VERSION}}" --commit "{{.COMMIT}}"
+
+  unit:
+    desc: Run unit tests with the race detector where supported
+    cmds:
+      - go test {{.RACE_FLAG}} -count=1 ./internal/... ./tools/...
+
+  integration:
+    desc: Build and exercise the real CLI
+    cmds:
+      - go test {{.RACE_FLAG}} -count=1 ./tests/integration/...
+
+  test:
+    desc: Run all unit and integration tests
+    cmds:
+      - task: unit
+      - task: integration
+
+  vet:
+    desc: Run Go static checks
+    cmds:
+      - go vet ./...
+
+  check:
+    desc: Run static checks and the complete test suite
+    cmds:
+      - task: vet
+      - task: test

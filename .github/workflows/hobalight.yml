@@ -1,0 +1,156 @@
+name: hoba-light
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: hoba-light-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  MODULE_DIRECTORY: ${{ github.event.repository.name == 'hoba-light' && '.' || 'hoba-light' }}
+  VERSION_MAJOR: ${{ github.event.repository.name == 'hoba-light' && '1' || '0' }}
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      source: ${{ steps.source.outputs.exists }}
+      version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.version.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Detect source module
+        id: source
+        shell: bash
+        run: |
+          if [[ -f "$MODULE_DIRECTORY/go.mod" ]]; then
+            echo 'exists=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'exists=false' >> "$GITHUB_OUTPUT"
+            echo 'Source module has not been added yet.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Determine version and tag main
+        if: steps.source.outputs.exists == 'true'
+        id: version
+        working-directory: ${{ env.MODULE_DIRECTORY }}
+        shell: bash
+        run: bash packaging/version.sh
+
+  packages:
+    needs: prepare
+    if: needs.prepare.outputs.source == 'true'
+    name: Packages (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux-amd64
+            system: linux
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux-arm64
+            system: linux
+            arch: arm64
+          - runner: windows-latest
+            platform: windows-amd64
+            system: windows
+            arch: amd64
+          - runner: windows-11-arm
+            platform: windows-arm64
+            system: windows
+            arch: arm64
+          - runner: macos-15
+            platform: darwin-arm64
+            system: darwin
+            arch: arm64
+          - runner: macos-15-intel
+            platform: darwin-amd64
+            system: darwin
+            arch: amd64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ env.MODULE_DIRECTORY }}
+    env:
+      BUILD_VERSION: ${{ needs.prepare.outputs.version }}
+      BUILD_COMMIT: ${{ needs.prepare.outputs.commit }}
+      TARGET_OS: ${{ matrix.system }}
+      TARGET_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: ${{ env.MODULE_DIRECTORY }}/go.sum
+      - name: Install build tools
+        run: |
+          go install github.com/go-task/task/v3/cmd/task@v3.54.0
+          if [[ "$TARGET_OS" == linux ]]; then
+            go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+          fi
+      - name: Install Windows packaging tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          dotnet tool install --tool-path .tools wix --version 5.0.2
+          if ($LASTEXITCODE -ne 0) { throw 'WiX installation failed' }
+          (Resolve-Path .tools).Path | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - name: Verify native runner architecture
+        run: |
+          test "$(go env GOOS)" = "$TARGET_OS"
+          test "$(go env GOARCH)" = "$TARGET_ARCH"
+      - name: Vet and test
+        run: task check
+      - name: Build installers and portable archive
+        run: |
+          go run ./tools/package --version "$BUILD_VERSION" --commit "$BUILD_COMMIT" --os "$TARGET_OS" --arch "$TARGET_ARCH" --homepage "https://github.com/$GITHUB_REPOSITORY"
+          go run ./tools/package --version 0.0.0 --commit "$BUILD_COMMIT" --os "$TARGET_OS" --arch "$TARGET_ARCH" --out dist-previous
+      - name: Verify Unix install, upgrade, and removal
+        if: runner.os != 'Windows'
+        run: bash packaging/test-unix.sh "$BUILD_VERSION" dist-previous dist "$TARGET_OS" "$TARGET_ARCH"
+      - name: Verify Windows install, upgrade, and removal
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & ./packaging/test-windows.ps1 -Version $env:BUILD_VERSION -Arch $env:TARGET_ARCH
+      - name: Upload packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: hobalight-${{ matrix.platform }}
+          path: ${{ env.MODULE_DIRECTORY }}/dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: [prepare, packages]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ env.MODULE_DIRECTORY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Publish release with checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
+        run: bash packaging/release.sh

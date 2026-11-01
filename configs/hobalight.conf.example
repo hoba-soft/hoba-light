@@ -1,0 +1,19 @@
+# Backup storage. Relative paths use this configuration file's directory.
+# "." stores backups beside this file; absolute paths are also supported.
+storage: .
+
+# Source directories. Relative paths use this configuration file's directory.
+# An empty list requires an explicit source: hl backup <directory>.
+# Example: directories: ["C:/Users/me/Documents", "./photos"]
+directories: []
+
+# Number of files processed concurrently; must be a positive integer.
+workers: 4
+
+# Exclusions applied relative to each source root. Use / even on Windows.
+# Example: exclude: ["*.log", "cache/", "/temp/"]
+# An empty list disables exclusions.
+exclude: []
+
+# gc permanently deletes objects after this many days in trash (positive integer).
+trash_retention_days: 30

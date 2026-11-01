@@ -1,0 +1,8 @@
+/bin/
+/hobalight.conf
+/.hobalight/
+/dist/
+/dist-previous/
+/.tools/
+/collected/
+/release-notes.txt
