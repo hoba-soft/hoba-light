@@ -82,7 +82,7 @@ func (s *Store) diffTargets(ctx context.Context, a, b diffTarget, mode string, w
 		}
 		return s.diffFileContent(ctx, x, y, mode, w)
 	}
-	if _, err = fmt.Fprintf(w, "--- %.8s  %s  %s\n+++ %.8s  %s  %s\n", a.id, old.session.Started, strings.TrimRight(old.session.Directory, "/")+pathSuffix(a.path), b.id, next.session.Started, strings.TrimRight(next.session.Directory, "/")+pathSuffix(b.path)); err != nil {
+	if _, err = fmt.Fprintf(w, "--- %.8s  %s  %s\n+++ %.8s  %s  %s\n", a.id, displayTimestamp(old.session.Started), strings.TrimRight(old.session.Directory, "/")+pathSuffix(a.path), b.id, displayTimestamp(next.session.Started), strings.TrimRight(next.session.Directory, "/")+pathSuffix(b.path)); err != nil {
 		return err
 	}
 	changes := 0

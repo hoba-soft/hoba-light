@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"golang.org/x/term"
@@ -13,6 +14,7 @@ import (
 type backupDisplay struct {
 	out           io.Writer
 	source        string
+	root          string
 	terminal      bool
 	fd            int
 	started, last time.Time
@@ -20,7 +22,10 @@ type backupDisplay struct {
 }
 
 func newBackupDisplay(out io.Writer, source string) *backupDisplay {
-	d := &backupDisplay{out: out, source: browserText(portable(source)), started: time.Now(), progress: progressUpdate{operation: "Backup", total: -1}}
+	d := &backupDisplay{out: out, root: source, source: browserText(portable(source)), started: time.Now(), progress: progressUpdate{operation: "Backup", total: -1}}
+	if info, err := os.Stat(source); err == nil && info.Mode().IsRegular() {
+		d.root = filepath.Dir(source)
+	}
 	if f, ok := out.(*os.File); ok {
 		d.fd = int(f.Fd())
 		d.terminal = term.IsTerminal(d.fd)
@@ -44,7 +49,7 @@ func (d *backupDisplay) finish(id string, err error) {
 	if err != nil {
 		label = "Backup finished with errors"
 	}
-	if id == "" {
+	if id == "" || (err != nil && ExitCode(err) == 1) {
 		label = "Backup failed"
 	}
 	header := label + ": " + d.source
@@ -57,7 +62,11 @@ func (d *backupDisplay) finish(id string, err error) {
 func (d *backupDisplay) draw(header string, final bool) {
 	row := d.progress.text() + " [" + elapsedText(time.Since(d.started)) + "]"
 	if !final && d.progress.current != "" {
-		row += "  " + browserText(portable(d.progress.current))
+		current := d.progress.current
+		if relative, err := filepath.Rel(d.root, current); err == nil {
+			current = relative
+		}
+		row += "  " + browserText(portable(current))
 	}
 	if d.terminal {
 		if width, _, err := term.GetSize(d.fd); err == nil {

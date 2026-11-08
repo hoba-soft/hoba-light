@@ -17,12 +17,13 @@ func TestListingTableAlignedColumns(t *testing.T) {
 			if runewidth.StringWidth(row) != width {
 				t.Fatal(row)
 			}
-			for _, pair := range [][2]string{{"Session", "12345678"}, {"Files", st.files}, {"Errors", st.errors}, {"Size", st.size}} {
-				end := strings.LastIndex(header, pair[0]) + len(pair[0])
-				suffixWidth := len(header) - end
-				valueEnd := width - suffixWidth
-				// Numeric values and hashes end exactly under their headings.
-				actual := runewidth.Truncate(browserSkipColumns(row, valueEnd-runewidth.StringWidth(pair[1])), runewidth.StringWidth(pair[1]), "")
+			hashColumn := strings.Index(header, "Session") + len("Session") - 8
+			if actual := runewidth.Truncate(browserSkipColumns(row, hashColumn), 8, ""); actual != "12345678" {
+				t.Fatalf("hash is not right aligned with its heading: %s", row)
+			}
+			for _, pair := range [][2]string{{"Files", st.files}, {"Errors", st.errors}, {"Size", st.size}} {
+				start := strings.LastIndex(header, pair[0]) + len(pair[0]) - len(pair[1])
+				actual := runewidth.Truncate(browserSkipColumns(row, start), runewidth.StringWidth(pair[1]), "")
 				if actual != pair[1] {
 					t.Fatalf("column %s: want %q got %q in %s", pair[0], pair[1], actual, row)
 				}

@@ -19,7 +19,7 @@ func TestBrowserNavigationRestoreAndOpen(t *testing.T) {
 	var output bytes.Buffer
 	var opened []string
 	changeWorkingDirectory(t, root)
-	input := "\x1b[C\x1b[C\x1b[Cro\x1b[D\x1b[D\x1b[Dq"
+	input := "\r\x1b[C\x1b[C\x1b[Cro\x1b[D\x1b[D\x1b[Dq"
 	must(t, s.browse(strings.NewReader(input), &output, func(p string) error { opened = append(opened, p); return nil }))
 	target := filepath.Join(canonical(root), restoreDirectory, id[:8], "nested", "file.txt")
 	if len(opened) != 1 || canonical(opened[0]) != canonical(target) || string(readFile(t, target)) != "hello" {
@@ -44,7 +44,7 @@ func TestBrowserEOFEmptyAndOpenFailure(t *testing.T) {
 	_, err := s.backup(source, false)
 	must(t, err)
 	out.Reset()
-	must(t, s.browse(strings.NewReader("\x1b[Coq"), &out, func(string) error { return errors.New("no associated application") }))
+	must(t, s.browse(strings.NewReader("\r\x1b[Coq"), &out, func(string) error { return errors.New("no associated application") }))
 	if !strings.Contains(out.String(), "no associated application") {
 		t.Fatal(out.String())
 	}

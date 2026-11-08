@@ -40,7 +40,7 @@ func (s *Store) restoreTo(prefix, dest, selected string, output io.Writer) error
 }
 
 // Plan from original metadata, preserving failures so intact files remain recoverable.
-func (s *Store) restoreItems(id, selected string) ([]restoreItem, error) {
+func (s *Store) restoreItems(id, selected, selectedFileID string) ([]restoreItem, error) {
 	if validID(id, 'F') {
 		if selected != "" {
 			return nil, errors.New("a file hash does not accept a session path")
@@ -59,11 +59,32 @@ func (s *Store) restoreItems(id, selected string) ([]restoreItem, error) {
 	if err := s.read(id, 'S', &session); err != nil {
 		return nil, err
 	}
+	// A browser file selection already has an object ID. Validate it against
+	// the session before reading just that file's authoritative metadata.
+	if selectedFileID != "" {
+		found := false
+		for _, fileID := range session.Files {
+			if fileID == selectedFileID {
+				found = true
+				break
+			}
+		}
+		if !found || selected == "" {
+			return nil, errors.New("selected file is not part of this session")
+		}
+		session.Files = []string{selectedFileID}
+	}
 	items := make([]restoreItem, 0, len(session.Files))
-	for _, fileID := range session.Files {
+	for i, fileID := range session.Files {
+		if i > 0 && i%64 == 0 {
+			s.report("Restore", i, -1, selected)
+		}
 		item := restoreItem{id: fileID}
 		if item.err = s.read(fileID, 'F', &item.file); item.err == nil {
 			item.relative, item.err = relative(session.Directory, item.file.Path)
+			if selectedFileID != "" && item.err == nil && item.relative != selected {
+				return nil, errors.New("selected file path does not match its metadata")
+			}
 			if item.err == nil && selected != "" && item.relative != selected && !strings.HasPrefix(item.relative, selected+"/") {
 				continue
 			}
@@ -100,13 +121,17 @@ func restoreDestination(id, destination string) (string, error) {
 
 // The CLI and browser share selection, destination layout, conflict handling and progress.
 func (s *Store) restoreResolved(id, selected, destination string, output io.Writer) (restoreResult, error) {
+	return s.restoreResolvedSelection(id, selected, destination, "", output)
+}
+
+func (s *Store) restoreResolvedSelection(id, selected, destination, selectedFileID string, output io.Writer) (restoreResult, error) {
 	var result restoreResult
 	selected, err := userRelative(selected)
 	if err != nil {
 		return result, errors.New("restore path must be relative to the session directory")
 	}
 	s.report("Restore", 0, -1, selected)
-	items, err := s.restoreItems(id, selected)
+	items, err := s.restoreItems(id, selected, selectedFileID)
 	if err != nil {
 		return result, err
 	}
@@ -151,6 +176,9 @@ func (s *Store) restoreFile(f File, dest, rel string) error {
 	if f.Error != "" {
 		return fmt.Errorf("file was not backed up: %s", f.Error)
 	}
+	if f.Size < 0 {
+		return errors.New("invalid file size in metadata")
+	}
 	native, err := nativeRelative(rel)
 	if err != nil {
 		return err
@@ -164,6 +192,10 @@ func (s *Store) restoreFile(f File, dest, rel string) error {
 	}
 	if !validID(f.Blob, 'B') {
 		return errors.New("invalid blob reference")
+	}
+	modified, err := time.Parse(time.RFC3339Nano, f.Modified)
+	if err != nil {
+		return err
 	}
 	if info, err := os.Lstat(target); err == nil {
 		if !info.Mode().IsRegular() {
@@ -185,12 +217,14 @@ func (s *Store) restoreFile(f File, dest, rel string) error {
 		if hex.EncodeToString(h.Sum(nil)) != f.Blob[:64] {
 			return errors.New("restored file exists with different content; it has changed, move or remove it before restoring again")
 		}
-		return nil
+		if info.Size() != f.Size {
+			return errors.New("file metadata size does not match restored content")
+		}
+		if info.ModTime().Equal(modified) {
+			return nil
+		}
+		return os.Chtimes(target, modified, modified)
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	modified, err := time.Parse(time.RFC3339Nano, f.Modified)
-	if err != nil {
 		return err
 	}
 	zr, err := s.openArchive(objectKey(f.Blob))
@@ -200,6 +234,9 @@ func (s *Store) restoreFile(f File, dest, rel string) error {
 	defer zr.Close()
 	if len(zr.File) != 1 {
 		return errors.New("blob must contain exactly one file")
+	}
+	if zr.File[0].UncompressedSize64 != uint64(f.Size) {
+		return errors.New("blob size does not match file metadata")
 	}
 	input, err := zr.File[0].Open()
 	if err != nil {
@@ -211,9 +248,12 @@ func (s *Store) restoreFile(f File, dest, rel string) error {
 		return err
 	}
 	h := sha256.New()
-	_, err = io.Copy(io.MultiWriter(out, h), input)
+	written, err := io.Copy(io.MultiWriter(out, h), input)
 	if closeErr := out.Close(); err == nil {
 		err = closeErr
+	}
+	if err == nil && written != f.Size {
+		err = errors.New("restored size does not match file metadata")
 	}
 	if err == nil && hex.EncodeToString(h.Sum(nil)) != f.Blob[:64] {
 		err = errors.New("blob checksum mismatch")

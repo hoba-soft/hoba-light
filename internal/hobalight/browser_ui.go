@@ -21,17 +21,30 @@ type browserPosition struct {
 	cursor    int
 }
 type browserUI struct {
-	stats             map[string]tableStats
-	showHelp          bool
-	helpOffset        int
-	streamDiff        *browserDiff
-	compareBase       *diffTarget
-	compareBaseLabel  string
-	history           *browserHistory
-	pendingFileDelete *fileDeletion
-	deleteOffset      int
-	searchInput       *string
-	search            *browserSearch
+	filterInput                  *string
+	filter                       *browserFilter
+	merged                       *browserMerged
+	datePicker                   *time.Time
+	dateReferences               map[string][]Reference
+	dateRootOffset, dateRootPage int
+	dateRootsFocus               bool
+	sources                      bool
+	source                       string
+	sourceCursor                 int
+	allRefs                      []Reference
+	stats                        map[string]tableStats
+	showHelp                     bool
+	helpOffset                   int
+	streamDiff                   *browserDiff
+	compareBase                  *diffTarget
+	compareBaseLabel             string
+	history                      *browserHistory
+	pendingFileDelete            *fileDeletion
+	deleteOffset                 int
+	searchInput                  *string
+	search                       *browserSearch
+	searchHistory                *browserHistory
+	searchParent                 *browserSearch
 
 	tree            map[string][]browserEntry
 	directoryTables map[string]listingTable
@@ -67,7 +80,11 @@ func (s *Store) browse(input io.Reader, output io.Writer, opener func(string) er
 	if err != nil {
 		return err
 	}
-	ui := browserUI{browser: browser{store: s, open: opener}, refs: groupedReferences(refs), stats: s.referenceStats(refs)}
+	refs, err = filterSessionDates(refs, s.sessionDate)
+	if err != nil {
+		return err
+	}
+	ui := browserUI{sources: true, browser: browser{store: s, open: opener}, refs: groupedReferences(refs), stats: s.referenceStats(refs)}
 	return ui.run(input, output, false)
 }
 
@@ -107,7 +124,8 @@ func (ui *browserUI) run(input io.Reader, output io.Writer, standalone bool) err
 		key string
 		err error
 	}
-	requests := make(chan bool)
+	type keyMode struct{ editing, calendar bool }
+	requests := make(chan keyMode)
 	results := make(chan keyResult)
 	stop := make(chan struct{})
 	defer close(stop)
@@ -116,10 +134,12 @@ func (ui *browserUI) run(input io.Reader, output io.Writer, standalone bool) err
 			select {
 			case <-stop:
 				return
-			case editing := <-requests:
+			case mode := <-requests:
 				var key string
 				var err error
-				if editing {
+				if mode.calendar {
+					key, err = readCalendarKey(keys)
+				} else if mode.editing {
 					key, err = readDestinationKey(keys)
 				} else {
 					key, err = readBrowserKey(keys)
@@ -147,14 +167,14 @@ func (ui *browserUI) run(input io.Reader, output io.Writer, standalone bool) err
 		} else {
 			fmt.Fprint(output, frame)
 		}
-		editing := ui.restoreToInput != nil || ui.searchInput != nil || (ui.streamDiff != nil && ui.streamDiff.input != nil)
+		editing := ui.restoreToInput != nil || ui.searchInput != nil || ui.filterInput != nil || (ui.streamDiff != nil && ui.streamDiff.input != nil)
 		// Scripted input should see the requested page before its next key.
 		if !terminal && ui.streamDiff != nil {
 			for d := ui.streamDiff; !d.spool.done && (d.spool.count < ui.diffOffset+ui.diffPageSize+1 || d.ending || d.scanning); {
 				fmt.Fprint(output, ui.view(width, height))
 			}
 		}
-		requests <- editing
+		requests <- keyMode{editing: editing, calendar: ui.datePicker != nil}
 		var result keyResult
 	waitKey:
 		for {
@@ -162,14 +182,14 @@ func (ui *browserUI) run(input io.Reader, output io.Writer, standalone bool) err
 			case result = <-results:
 				break waitKey
 			case <-ticker.C:
-				if terminal && ui.streamDiff != nil {
+				if terminal {
 					d := ui.streamDiff
 					resized := false
 					if w, h, e := term.GetSize(int(output.(*os.File).Fd())); e == nil && (w != width || h != height) {
 						width, height = w, h
 						resized = true
 					}
-					if resized || d.scanning || d.ending || !d.spool.done && d.spool.count < ui.diffOffset+ui.diffPageSize+1 {
+					if resized || d != nil && (d.scanning || d.ending || !d.spool.done && d.spool.count < ui.diffOffset+ui.diffPageSize+1) {
 						fmt.Fprint(output, "\x1b[H\x1b[2J", strings.ReplaceAll(ui.view(width, height), "\n", "\r\n"))
 					}
 				}
@@ -193,6 +213,10 @@ func (ui *browserUI) run(input io.Reader, output io.Writer, standalone bool) err
 	}
 }
 func readBrowserKey(r *bufio.Reader) (string, error) {
+	return readNavigationKey(r, "left")
+}
+
+func readNavigationKey(r *bufio.Reader, escape string) (string, error) {
 	b, err := r.ReadByte()
 	if err != nil {
 		return "", err
@@ -218,7 +242,7 @@ func readBrowserKey(r *bufio.Reader) (string, error) {
 		return "left", nil
 	case 27:
 		if r.Buffered() == 0 {
-			return "left", nil
+			return escape, nil
 		}
 		first, err := r.ReadByte()
 		if err != nil {
@@ -226,7 +250,7 @@ func readBrowserKey(r *bufio.Reader) (string, error) {
 		}
 		if first != '[' && first != 'O' {
 			r.UnreadByte()
-			return "left", nil
+			return escape, nil
 		}
 		sequence := make([]byte, 0, 8)
 		for len(sequence) < 16 {
@@ -261,7 +285,7 @@ func readBrowserKey(r *bufio.Reader) (string, error) {
 		}
 		return "", nil
 	default:
-		if b == 'X' || b == 'N' {
+		if b == 'X' || b == 'N' || b == 'D' {
 			return string(b), nil
 		}
 		return strings.ToLower(string(b)), nil
@@ -272,11 +296,29 @@ func (u *browserUI) count() int {
 		return 0
 	}
 	if u.ref == nil {
+		if u.sources {
+			return len(u.sourceNames())
+		}
 		return len(u.refs)
 	}
 	return len(u.entries)
 }
 func (u *browserUI) key(key string) {
+	if u.filterKey(key) {
+		return
+	}
+	if u.datePicker != nil {
+		u.datePickerKey(key)
+		return
+	}
+	if key == "m" && !u.showHelp && u.filterInput == nil && u.searchInput == nil && u.restoreToInput == nil && u.streamDiff == nil && u.pendingDelete == nil && u.pendingFileDelete == nil {
+		u.toggleMergedMode()
+		return
+	}
+	if key == "D" && !u.showHelp && u.filterInput == nil && u.searchInput == nil && u.restoreToInput == nil && u.streamDiff == nil && u.pendingDelete == nil && u.pendingFileDelete == nil {
+		u.openDatePicker()
+		return
+	}
 	if u.showHelp {
 		switch key {
 		case "?", "cancel", "left", "right", "b":
@@ -292,7 +334,7 @@ func (u *browserUI) key(key string) {
 		}
 		return
 	}
-	if key == "?" && u.searchInput == nil && u.restoreToInput == nil && (u.streamDiff == nil || u.streamDiff.input == nil) {
+	if key == "?" && u.filterInput == nil && u.searchInput == nil && u.restoreToInput == nil && (u.streamDiff == nil || u.streamDiff.input == nil) {
 		u.showHelp = true
 		u.helpOffset = 0
 		return
@@ -330,6 +372,10 @@ func (u *browserUI) key(key string) {
 		return
 	}
 
+	if u.merged != nil && u.detail != nil && u.history != nil {
+		u.mergedDetailKey(key)
+		return
+	}
 	if u.history != nil {
 		u.historyKey(key)
 		return
@@ -349,6 +395,10 @@ func (u *browserUI) key(key string) {
 		return
 	}
 
+	if u.merged != nil {
+		u.mergedKey(key)
+		return
+	}
 	switch key {
 	case "j":
 		key = "down"
@@ -401,7 +451,7 @@ func (u *browserUI) key(key string) {
 		u.restoreSelection(key == "o")
 	case "t":
 		u.beginRestoreTo()
-	case "/":
+	case "n":
 		text := ""
 		u.searchInput = &text
 		u.message = ""
@@ -421,10 +471,9 @@ func (u *browserUI) key(key string) {
 			if err != nil {
 				u.message = "Error: " + err.Error()
 			} else {
-				u.refs = groupedReferences(refs)
-				u.stats = u.store.referenceStats(refs)
-				u.sessionTable = nil
-				u.cursor = min(u.cursor, max(0, len(refs)-1))
+				cursor := u.cursor
+				u.replaceReferences(refs)
+				u.cursor = min(cursor, max(0, u.count()-1))
 				u.clearComparison()
 				u.message = "Sessions refreshed"
 			}
@@ -436,12 +485,19 @@ func (u *browserUI) enter() {
 		return
 	}
 	if u.ref == nil {
+		if u.sources {
+			u.sourceCursor = u.cursor
+			u.selectSource(u.sourceNames()[u.cursor])
+			u.message = ""
+			return
+		}
 		ref := u.refs[u.cursor]
 		session, files, err := u.store.listingFiles(ref.Session)
 		if err != nil {
 			u.message = "Error: " + err.Error()
 			return
 		}
+		ref.Comment = session.Comment
 		u.sessionCursor = u.cursor
 		u.ref = &ref
 		u.files = files
@@ -480,6 +536,14 @@ func (u *browserUI) back() {
 		return
 	}
 	if u.ref == nil {
+		if u.source != "" {
+			u.refs = u.allRefs
+			u.allRefs = nil
+			u.source = ""
+			u.sources = true
+			u.cursor = min(u.sourceCursor, max(0, u.count()-1))
+			u.sessionTable = nil
+		}
 		u.clearComparison()
 		u.message = ""
 		return
@@ -561,6 +625,9 @@ func wrapBrowserText(s string, width int) []string {
 }
 
 func (u *browserUI) help() string {
+	if u.filterInput != nil {
+		return "Enter filter · Esc cancel · Backspace erase · Ctrl+U clear"
+	}
 	if u.pendingFileDelete != nil {
 		return "y delete from all sessions · n/Enter cancel · ↑/↓ scroll · q quit"
 	}
@@ -571,17 +638,33 @@ func (u *browserUI) help() string {
 		return "Enter restore · Esc cancel · Backspace erase · Ctrl+U clear"
 	}
 
-	if u.history != nil {
-		return "↑/↓ select · Enter sessions/locate · c content · d compare · r restore · t restore-to · o open · ← back · q quit"
-	}
-	if u.search != nil && u.pendingDelete == nil {
-		return "↑/↓ select · Enter locate · r restore · t restore-to · o open · x/Del delete · X delete file globally · c content · d compare · v history · / search · Esc/← back · q quit"
-	}
 	if u.pendingDelete != nil {
 		return "y delete · n/Enter cancel · q quit"
 	}
-	if u.detail != nil {
+	if (u.search == nil || u.merged != nil) && u.detail != nil && (u.history == nil || u.merged != nil) {
+		if u.merged != nil {
+			return "← back · c content · d compare · r restore · t restore-to · o open · D date · m sessions mode · q quit"
+		}
 		return "← back · r restore · t restore-to · o restore & open · x/Del delete · X delete file globally · c content · d compare · v history · q quit"
+	}
+	if u.history != nil {
+		if u.merged != nil {
+			if u.history.sessions {
+				return "↑/↓ select · Enter session · s versions · c content · r restore · t restore-to · o open · ← back · / filter · n search · D date · m sessions mode · q quit"
+			}
+			return "↑/↓ select · Enter metadata · s sessions · c content · r restore · t restore-to · o open · ← back · / filter · n search · D date · m mode · q quit"
+		}
+		return "↑/↓ select · Enter sessions/locate · c content · d compare · r restore · t restore-to · o open · ← back · / filter · n search · q quit"
+	}
+	if u.search != nil && u.pendingDelete == nil {
+		return "↑/↓ select · Enter locate · r restore · t restore-to · o open · x/Del delete · X delete file globally · c content · d compare · v history · / filter · n search · Esc/← back · q quit"
+	}
+
+	if u.merged != nil {
+		return "↑/↓ select · Enter folder/versions · ← back · / filter · n search · D date · m sessions mode · f refresh · q quit"
+	}
+	if u.sources {
+		return "↑/↓ select · Enter sessions · / filter · n search · D date · m files mode · f refresh · q quit"
 	}
 	var keys []string
 	if u.count() > 1 {
@@ -612,7 +695,7 @@ func (u *browserUI) help() string {
 		}
 		keys = append(keys, "f refresh")
 	}
-	return strings.Join(append(keys, "/ search", "q quit"), " · ")
+	return strings.Join(append(keys, "/ filter · n search", "D date", "m mode", "q quit"), " · ")
 }
 
 func (u *browserUI) prepareTree() {
@@ -634,30 +717,77 @@ func (u *browserUI) prepareTree() {
 			values = append(values, entryStats(entry))
 		}
 		u.directorySizes[directory] = total
-		u.directoryTables[directory] = newListingTable(nil, values)
+		u.directoryTables[directory] = newListingTable(browserEntryNames(entries), values)
 	}
 }
 
-// Preserve the end of a long path, including its current directory or file name.
+// Preserve both the beginning and end, giving the file name more room.
+// Work in terminal columns and whole graphemes, including emoji and accents.
 func browserPath(s string, width int) string {
 	s = browserText(s)
+	if width <= 0 {
+		return ""
+	}
 	if runewidth.StringWidth(s) <= width {
 		return s
 	}
-	return "…" + browserSkipColumns(s, runewidth.StringWidth(s)-max(0, width-1))
+	if width == 1 {
+		return "…"
+	}
+	var clusters []string
+	g := uniseg.NewGraphemes(s)
+	for g.Next() {
+		clusters = append(clusters, g.Str())
+	}
+	left, used := 0, 0
+	for left < len(clusters) {
+		size := runewidth.StringWidth(clusters[left])
+		if used+size > (width-1)/3 {
+			break
+		}
+		used += size
+		left++
+	}
+	right := len(clusters)
+	remaining := width - 1 - used
+	for right > left {
+		size := runewidth.StringWidth(clusters[right-1])
+		if size > remaining {
+			break
+		}
+		remaining -= size
+		right--
+	}
+	return strings.Join(clusters[:left], "") + "…" + strings.Join(clusters[right:], "")
 }
+
 func (u *browserUI) briefHelp() string {
-	if u.pendingDelete != nil || u.pendingFileDelete != nil || u.searchInput != nil || u.restoreToInput != nil {
+	if u.pendingDelete != nil || u.pendingFileDelete != nil || u.filterInput != nil || u.searchInput != nil || u.restoreToInput != nil {
 		return u.help()
 	}
-	if u.detail != nil {
-		return "← back · c content · r restore · ? help · q quit"
+	if (u.search == nil || u.merged != nil) && u.detail != nil && (u.history == nil || u.merged != nil) {
+		return "← back · c content · r restore · t restore-to · ? help · q quit"
 	}
 	if u.history != nil {
-		return "↑/↓ select · →/Enter open · ← back · ? help · q quit"
+		if u.merged != nil && !u.history.sessions {
+			return "↑/↓ select · Enter metadata · s sessions · ← back · / filter · n search · ? help · q quit"
+		}
+		return "↑/↓ select · Enter sessions/locate · ← back · / filter · n search · ? help · q quit"
 	}
 	if u.search != nil {
-		return "↑/↓ select · →/Enter locate · ← back · ? help · q quit"
+		return "↑/↓ select · Enter locate · ← back · / filter · n search · ? help · q quit"
 	}
-	return "↑/↓ select · →/Enter open · ← back · / search · ? help · q quit"
+	if u.merged != nil {
+		return "↑/↓ select · Enter folder/versions · ← back · / filter · n search · D date · m sessions mode · f refresh · ? help · q quit"
+	}
+	if u.sources {
+		return "↑/↓ select · Enter sessions · / filter · n search · D date · m files mode · f refresh · ? help · q quit"
+	}
+	if u.ref == nil {
+		return "↑/↓ select · Enter session · ← roots · / filter · n search · D date · m files mode · ? help · q quit"
+	}
+	if len(u.entries) > 0 && !u.entries[u.cursor].directory {
+		return "↑/↓ select · Enter metadata · ← back · / filter · n search · ? help · q quit"
+	}
+	return "↑/↓ select · Enter folder · ← back · / filter · n search · ? help · q quit"
 }

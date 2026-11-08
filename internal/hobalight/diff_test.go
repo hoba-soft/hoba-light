@@ -1,6 +1,7 @@
 package hobalight
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -45,7 +46,7 @@ func TestSessionListNestedAndInvalidPath(t *testing.T) {
 	must(t, err)
 	var output strings.Builder
 	must(t, s.list([]string{id[:8], "nested"}, &output))
-	if !strings.Contains(output.String(), "file  ") || strings.Contains(output.String(), " F ") || strings.Contains(output.String(), " B ") {
+	if !strings.Contains(output.String(), "file  ") || regexp.MustCompile(`[0-9a-f]{8} [FB] `).MatchString(output.String()) {
 		t.Fatal(output.String())
 	}
 	for _, p := range []string{"../escape", "..", "/absolute", "C:/absolute", "missing"} {
@@ -60,7 +61,7 @@ func TestModificationDetails(t *testing.T) {
 	before := File{Identity: Identity{Size: 1024, Modified: "old"}, Blob: "a"}
 	after := File{Identity: Identity{Size: 2048, Created: &created, Modified: "new"}, Blob: "b"}
 	details := strings.Join(modificationDetails(before, after), "\n")
-	want := "content: changed\nsize: 1.0 KiB (1024 bytes) -> 2.0 KiB (2048 bytes)\ncreated: unavailable -> " + created + "\nmodified: old -> new"
+	want := "content: changed\nsize: 1.0 KiB (1024 bytes) -> 2.0 KiB (2048 bytes)\ncreated: unavailable -> " + displayTimestamp(created) + "\nmodified: old -> new"
 	if details != want {
 		t.Fatalf("%s", details)
 	}

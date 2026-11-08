@@ -12,6 +12,8 @@ type browserDiff struct {
 	parent                   *browserDiff
 	savedOffset, savedColumn int
 	backward                 bool
+	searchCurrent            bool
+	contentTop               int
 	spool                    *diffSpool
 	a, b                     diffTarget
 	mode, query              string
@@ -105,6 +107,7 @@ func (u *browserUI) streamDiffKey(key string) {
 			d.input = nil
 			d.scanning = d.query != ""
 			d.backward = false
+			d.searchCurrent = d.contentID != ""
 			u.diffSearch(false)
 		default:
 			if len(*d.input) < 1024 {
@@ -135,12 +138,24 @@ func (u *browserUI) streamDiffKey(key string) {
 	case "down", "j":
 		u.diffOffset++
 	case "pageup":
+		if d.contentID != "" {
+			d.contentTop = max(0, d.contentTop-page)
+		}
 		u.diffOffset = max(0, u.diffOffset-page)
 	case "pagedown":
+		if d.contentID != "" {
+			d.contentTop += page
+		}
 		u.diffOffset += page
 	case "halfup":
+		if d.contentID != "" {
+			d.contentTop = max(0, d.contentTop-max(1, page/2))
+		}
 		u.diffOffset = max(0, u.diffOffset-max(1, page/2))
 	case "halfdown":
+		if d.contentID != "" {
+			d.contentTop += max(1, page/2)
+		}
 		u.diffOffset += max(1, page/2)
 	case "home":
 		u.diffOffset = 0
@@ -181,6 +196,10 @@ func (u *browserUI) diffSearch(back bool) {
 		return
 	}
 	start := u.diffOffset + 1
+	if d.searchCurrent {
+		start = u.diffOffset
+		d.searchCurrent = false
+	}
 	step := 1
 	if back {
 		start = u.diffOffset - 1
@@ -211,6 +230,9 @@ func (u *browserUI) diffSearch(back bool) {
 }
 func (u *browserUI) streamDiffView(width, height int) ([]string, []string, []string) {
 	d := u.streamDiff
+	if d.contentID != "" {
+		return u.contentView(width, height)
+	}
 	page := max(1, height-10)
 	u.diffPageSize = page
 	u.diffWidth = max(8, width-5)
@@ -219,9 +241,6 @@ func (u *browserUI) streamDiffView(width, height int) ([]string, []string, []str
 		u.diffOffset = max(0, d.spool.count-page)
 		if d.spool.done {
 			u.message = "End of comparison"
-			if d.contentID != "" {
-				u.message = "End of file"
-			}
 			d.ending = false
 		}
 	}
@@ -237,11 +256,8 @@ func (u *browserUI) streamDiffView(width, height int) ([]string, []string, []str
 	if !d.spool.done {
 		total += "+"
 	}
-	title := "Comparison"
-	if d.contentID != "" {
-		title = "Content"
-	}
-	header := []string{fmt.Sprintf(title+" · %s · lines %d-%d/%s", d.mode, u.diffOffset+1, end, total), ""}
+	position := fmt.Sprintf("lines %d-%d/%s", u.diffOffset+1, end, total)
+	header := []string{fmt.Sprintf("Comparison · %s · %s", d.mode, position), ""}
 	var rows []string
 	for i := u.diffOffset; i < end; i++ {
 		rows = append(rows, selectionMarker(i == u.diffOffset)+browserSkipColumns(d.spool.row(i), u.diffColumn))

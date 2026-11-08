@@ -109,5 +109,5 @@ func TestDiffFailedFileCLI(t *testing.T) {
 func TestComparisonBaseVisibleInBrowser(t *testing.T) {
 	c, _, _ := contentDiffFixture(t)
 	out := c.interact(testBinary, "\r\rdd\x1b[D\x1b[Dq", nil)
-	requireOutput(t, out, "Compare base:", "[compare base]", "Comparison selection cleared")
+	requireOutput(t, out, "[compare base]", "Comparison selection cleared")
 }

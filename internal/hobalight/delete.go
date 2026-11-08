@@ -137,6 +137,12 @@ func (s *Store) deletePathLocked(prefix, selected, fileID string, output io.Writ
 		}
 	}
 	session.Errors = retainedErrors
+	if session.Status != sessionFailed {
+		session.Status = sessionCompleted
+		if len(session.Errors) > 0 {
+			session.Status = sessionCompletedWithErrors
+		}
+	}
 	data, err := encode(session)
 	if err != nil {
 		return "", err

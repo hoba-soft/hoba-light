@@ -2,7 +2,10 @@ package hobalight
 
 import (
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/mattn/go-runewidth"
 )
 
 type browserHistory struct {
@@ -21,6 +24,9 @@ func (h *browserHistory) selected() (searchMatch, bool) {
 	cursor := 0
 	if h.sessions {
 		cursor = h.sessionCursor
+	}
+	if len(version.sessions) == 0 {
+		return searchMatch{}, false
 	}
 	return version.sessions[cursor], true
 }
@@ -74,13 +80,28 @@ func (u *browserUI) historyKey(key string) {
 		if count == 0 {
 			return
 		}
+		if !h.sessions && u.merged != nil {
+			version := h.versions[h.cursor]
+			full := sessionFile{id: version.id, metadata: version.file, relative: version.file.Path}
+			u.detail = &full
+			return
+		}
 		if !h.sessions {
 			h.sessions = true
 			h.sessionCursor = 0
 		} else {
 			match, _ := h.selected()
 			u.history = nil
+			if u.merged != nil {
+				u.merged = nil
+				u.sources = true
+			}
 			u.locateMatch(match)
+		}
+	case "s":
+		if len(h.versions) > 0 {
+			h.sessions = !h.sessions
+			h.sessionCursor = 0
 		}
 	case "c":
 		u.showContent()
@@ -95,39 +116,55 @@ func (u *browserUI) historyKey(key string) {
 
 func (u *browserUI) historyList(width, visible int) []string {
 	h := u.history
+	heading := " " + hashSizeColumn("First backed up / Sessions", "Hash", "Size", width, 9)
+	if h.sessions {
+		heading = " " + historySessionRow("Started", "Session", "Comment / Source", "", width)
+	}
 	if len(h.versions) == 0 {
-		return []string{"No file versions found."}
+		return []string{heading, "No file versions found."}
 	}
 	cursor, count := h.cursor, len(h.versions)
 	if h.sessions {
 		cursor, count = h.sessionCursor, len(h.versions[h.cursor].sessions)
 	}
-	visible = max(1, visible)
+	visible = max(1, visible-1)
 	start := max(0, cursor-visible+1)
-	var lines []string
-	if !h.sessions {
-		lines = append(lines, "  First backed up")
-		visible = max(1, visible-1)
-		start = max(0, cursor-visible+1)
-	}
+	lines := []string{heading}
 	for i := start; i < min(count, start+visible); i++ {
 		var row string
 		if h.sessions {
 			m := h.versions[h.cursor].sessions[i]
-			row = browserClip(sessionLabel(m.ref)+"  "+m.ref.Directory, max(8, width-5))
+			row = historySessionRow(sessionTime(m.ref), m.ref.Session[:8], m.ref.Comment, m.ref.Directory, width)
 		} else {
 			v := h.versions[i]
-			label := fmt.Sprintf("%s  %s", v.earliest.UTC().Format(time.RFC3339Nano), historySessionCount(len(v.sessions)))
+			label := fmt.Sprintf("%s  %s", v.earliest.In(time.Local).Format(time.RFC3339Nano), historySessionCount(len(v.sessions)))
 			if u.isComparisonBase(v.id, "") {
 				label = "[compare base] " + label
 			}
-			row = hashSizeColumn(markedFileName(label, v.file), v.id[:8], displaySize(v.file.Size), max(8, width-5), 9)
+			row = hashSizeColumn(markedFileName(label, v.file), v.id[:8], displaySize(v.file.Size), width, 9)
 		}
 		lines = append(lines, selectionMarker(i == cursor)+row)
 	}
-	label := "versions"
-	if h.sessions {
-		label = "sessions"
+	return lines
+}
+
+func historySessionRow(started, session, comment, source string, width int) string {
+	commentWidth := min(40, max(16, (width-38)/2))
+	return browserTextColumns(started, browserRight(session, 8)+"  "+browserRight(historyCommentSource(comment, source, commentWidth), commentWidth), width, 8+2+commentWidth)
+}
+
+func historyCommentSource(comment, source string, width int) string {
+	comment, source = browserText(comment), browserText(source)
+	if comment == "" {
+		return browserPath(source, width)
 	}
-	return append(lines, fmt.Sprintf("%d/%d %s", cursor+1, count, label))
+	if source == "" {
+		return browserPath(comment, width)
+	}
+	// Preserve short comments; shorten the source independently so it cannot
+	// swallow the comment when the two share a column.
+	commentWidth := min(runewidth.StringWidth(comment), max(1, width-1-min(10, width/3)))
+	comment = browserPath(comment, commentWidth)
+	source = browserPath(source, max(0, width-runewidth.StringWidth(comment)-1))
+	return strings.TrimSpace(comment + " " + source)
 }

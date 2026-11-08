@@ -81,10 +81,19 @@ func sessionTime(ref Reference) string {
 	if err != nil {
 		return ref.Started
 	}
-	return started.UTC().Format("2006-01-02 15:04:05") + " UTC"
+	return started.In(time.Local).Format("2006-01-02 15:04:05 -07:00")
 }
 
-func sessionLabel(ref Reference) string { return sessionTime(ref) + "  " + ref.Session[:8] }
+func sessionLabel(ref Reference) string {
+	return sessionTime(ref) + "  " + ref.Session[:8] + commentSuffix(ref.Comment)
+}
+
+func commentSuffix(comment string) string {
+	if comment == "" {
+		return ""
+	}
+	return "  — " + browserText(comment)
+}
 
 func (s *Store) sessionFiles(id string) (Session, []sessionFile, error) {
 	var session Session
@@ -114,6 +123,10 @@ func (s *Store) list(args []string, output io.Writer) error {
 		if err != nil {
 			return err
 		}
+		refs, err = filterSessionDates(refs, s.sessionDate)
+		if err != nil {
+			return err
+		}
 		stats := s.referenceStats(refs)
 		var names []string
 		var values []tableStats
@@ -129,7 +142,7 @@ func (s *Store) list(args []string, output io.Writer) error {
 				fmt.Fprintln(output)
 				fmt.Fprintln(output, browserText(ref.Directory))
 			}
-			fmt.Fprintln(output, "  "+table.row(sessionTime(ref), ref.Session[:8], stats[ref.Session], 0))
+			fmt.Fprintln(output, "  "+table.row(sessionTime(ref), ref.Session[:8], stats[ref.Session], 0)+commentSuffix(ref.Comment))
 			directory = ref.Directory
 		}
 		return nil
@@ -141,6 +154,11 @@ func (s *Store) list(args []string, output io.Writer) error {
 	session, files, err := s.listingFiles(id)
 	if err != nil {
 		return err
+	}
+	if matches, err := matchesSessionDate(session.Started, s.sessionDate); err != nil {
+		return err
+	} else if !matches {
+		return errors.New("session is outside the selected date")
 	}
 	current := ""
 	if len(args) == 2 {
@@ -154,6 +172,13 @@ func (s *Store) list(args []string, output io.Writer) error {
 	}
 	header := fmt.Sprintf("Session %s  %s  %s  %s", id[:8], directory, displayFileCounts(filesCount(files, current), filesErrors(files, current)), displaySize(filesSize(files, current)))
 	fmt.Fprintln(output, header)
+	fmt.Fprintln(output, "Status: "+session.completionStatus())
+	if session.Comment != "" {
+		fmt.Fprintln(output, "Comment: "+browserText(session.Comment))
+	}
+	for _, message := range session.Errors {
+		fmt.Fprintln(output, "Backup error: "+browserText(message))
+	}
 	fmt.Fprintln(output, strings.Repeat("─", runewidth.StringWidth(header)))
 	for _, f := range files {
 		if current != "" && f.relative == current {

@@ -110,7 +110,7 @@ func TestIntegrationDefaultsWithoutConfig(t *testing.T) {
 	if string(config) != string(example) {
 		t.Fatalf("generated config differs from documented example: %s", config)
 	}
-	c.fails("no backup directories configured", "backup")
+	c.fails("no backup sources configured", "backup")
 	writeFile(t, filepath.Join(c.source, "note.txt"), []byte("explicit source"))
 	c.ok("backup", c.source)
 	refs := c.refs()

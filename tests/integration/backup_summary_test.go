@@ -40,6 +40,6 @@ func TestBackupSummaryMultipleDirectoriesAndErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("failed backup passed")
 	}
-	requireOutput(t, out, "1 error", "Backup finished with errors:")
+	requireOutput(t, out, "1 error", "Backup failed:")
 	must(t, os.RemoveAll(obstruction))
 }

@@ -2,18 +2,51 @@ package hobalight
 
 import (
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/mattn/go-runewidth"
 )
 
-func (u *browserUI) view(width, height int) string {
-	header := []string{"Hoba Light Browser"}
-	if u.compareBase != nil {
-		height--
+type browserPanelLine struct {
+	text      string
+	separator bool
+}
+
+func browserBox(lines []browserPanelLine, width int) []string {
+	result := []string{"┌" + strings.Repeat("─", width+1) + "┐"}
+	for _, row := range lines {
+		if row.separator {
+			result = append(result, "├"+strings.Repeat("─", width+1)+"┤")
+			continue
+		}
+		line := row.text
+		marker := " "
+		if strings.HasPrefix(line, ">") {
+			marker, line = ">", strings.TrimPrefix(line, ">")
+		} else {
+			line = strings.TrimPrefix(line, " ")
+		}
+		line = browserClip(line, width)
+		result = append(result, "│"+marker+line+strings.Repeat(" ", max(0, width-runewidth.StringWidth(line)))+"│")
 	}
+	return append(result, "└"+strings.Repeat("─", width+1)+"┘")
+}
+
+func (u *browserUI) view(width, height int) string {
+	contentWidth := max(8, width-3)
+	header := []string{"Hoba Light Browser"}
 	var content, footer []string
-	if u.showHelp {
+	var contentRules []int
+	if u.filterInput != nil {
+		header = append(header, "Filter current list", "")
+		content = wrapBrowserText("> "+*u.filterInput+"█", max(8, width-5))
+		footer = []string{"Enter apply · Esc cancel · empty text clears filter"}
+	} else if u.datePicker != nil {
+		header = append(header, "Select session date (local time) · "+u.datePicker.Format("2006-01-02"))
+		content, contentRules = u.datePickerView(width, height)
+		footer = u.datePickerHelp()
+	} else if u.showHelp {
 		header = append(header, "Keyboard shortcuts", "")
 		help := u.help()
 		if u.streamDiff != nil {
@@ -31,10 +64,15 @@ func (u *browserUI) view(width, height int) string {
 		content = rows[u.helpOffset:min(len(rows), u.helpOffset+visible)]
 		footer = []string{"↑/↓ scroll · ?/Esc/← close · q quit"}
 	} else if u.streamDiff != nil {
-		h, c, f := u.streamDiffView(width, height)
+		viewerWidth, viewerHeight := max(8, width-4), max(1, height-2)
+		if u.streamDiff.contentID != "" {
+			viewerWidth, viewerHeight = contentWidth, height
+		}
+		h, c, f := u.streamDiffView(viewerWidth, viewerHeight)
 		header = append(header, h...)
 		content = c
 		footer = f
+
 	} else if u.pendingFileDelete != nil {
 		header = append(header, "Delete file from all sessions?", "")
 		var lines []string
@@ -55,22 +93,27 @@ func (u *browserUI) view(width, height int) string {
 		content = append(content, wrapBrowserText("Path: "+selected, max(8, width-5))...)
 		content = append(content, "Destination (relative to working directory):")
 		content = append(content, wrapBrowserText("> "+*u.restoreToInput+"█", max(8, width-5))...)
-		footer = wrapBrowserText(u.briefHelp(), max(8, width-1))
+		footer = wrapBrowserHelp(u.briefHelp(), max(8, width-3))
+	} else if u.merged != nil && u.detail != nil && u.history != nil {
+		header = append(header, "File version metadata", browserPath(u.history.path, max(8, width-3)))
+		content = fileDetails(*u.detail, contentWidth)
+		footer = []string{"← back · c content · r restore · t restore-to · o open · D date · m mode · q quit"}
 	} else if u.history != nil {
-		header = append(header, "File history: "+browserPath(u.history.path, max(8, width-15)), "")
+		suffix := ""
 		if u.history.sessions {
-			header = append(header, "Version: "+u.history.versions[u.history.cursor].id[:8])
+			suffix = " · Version: " + u.history.versions[u.history.cursor].id[:8]
 		}
-		content = u.historyList(width, max(1, height-11))
-		footer = wrapBrowserText(u.briefHelp(), max(8, width-1))
+		header = append(header, "File history: "+browserPath(u.history.path, max(8, width-19-runewidth.StringWidth(suffix)))+suffix)
+		content = u.historyList(contentWidth, u.listHeight(width, height))
+		footer = wrapBrowserHelp(u.briefHelp(), max(8, width-3))
 	} else if u.searchInput != nil {
-		header = append(header, "Find files · "+u.searchScope(max(8, width-14)), "")
+		header = append(header, "Search names · All sessions", "")
 		content = wrapBrowserText("> "+*u.searchInput+"█", max(8, width-5))
-		footer = wrapBrowserText(u.briefHelp(), max(8, width-1))
+		footer = wrapBrowserHelp(u.briefHelp(), max(8, width-3))
 	} else if u.search != nil && u.pendingDelete == nil {
 		header = append(header, "Find: "+u.search.query, "Scope: "+u.searchScope(max(8, width-8)), "")
-		content = u.searchList(width, max(1, height-11))
-		footer = wrapBrowserText(u.briefHelp(), max(8, width-1))
+		content = u.searchList(contentWidth, u.listHeight(width, height))
+		footer = wrapBrowserHelp(u.briefHelp(), max(8, width-3))
 	} else if u.pendingDelete != nil {
 		ref := *u.pendingDelete
 		header = append(header, "Delete session?", "")
@@ -83,48 +126,91 @@ func (u *browserUI) view(width, height int) string {
 		} else {
 			content = append(content, "", "Move the session to trash and remove its references?", "Run gc later to collect unreferenced file data.")
 		}
-		footer = wrapBrowserText(u.briefHelp(), max(8, width-1))
+		footer = wrapBrowserHelp(u.briefHelp(), max(8, width-3))
 
 	} else {
-		visible := max(1, height-11)
-		if u.ref == nil {
-			header = append(header, "Sessions", "")
-			content = u.sessionList(width, visible)
+		visible := u.listHeight(width, height)
+		if u.merged != nil {
+			header = append(header, "Merged files", browserPath(u.mergedLocation(), max(8, width-3)))
+
+			content = u.mergedList(contentWidth, visible)
+		} else if u.ref == nil {
+			if u.sources {
+				header = append(header, "Sources", "")
+				content = u.sourceList(contentWidth, visible)
+			} else {
+				header = append(header, "Sessions · "+browserPath(u.source, max(8, width-16)))
+				content = u.sessionList(contentWidth, visible)
+			}
 		} else {
 			u.prepareTree()
-			directory := strings.TrimRight(u.ref.Directory, "/") + "/" + u.current
-			header = append(header, "Session "+u.ref.Session[:8])
-			if u.detail == nil {
-				suffix := displayFileCounts(u.directoryCounts[u.current], u.directoryErrors[u.current]) + "  " + displaySize(u.directorySizes[u.current])
-				header = append(header, sizeColumn(browserPath(directory, max(1, width-3-runewidth.StringWidth(suffix))), suffix, max(8, width-1)))
+			label := "Sources › " + browserPath(u.ref.Directory, max(8, width/2)) + " › Session " + u.ref.Session[:8]
+			if u.current != "" {
+				label += " › " + u.current
 			}
-			header = append(header, "")
 			if u.detail != nil {
-				content = fileDetails(*u.detail, width)
+				label += " › " + path.Base(u.detail.relative)
+			}
+			header = append(header, label)
+			if u.detail != nil {
+				content = fileDetails(*u.detail, contentWidth)
 			} else {
-				content = u.directoryList(width, visible)
+				content = u.directoryList(contentWidth, visible)
+
 			}
 		}
-		footer = wrapBrowserText(u.briefHelp(), max(8, width-1))
+		footer = wrapBrowserHelp(u.briefHelp(), max(8, width-3))
 	}
-	// Separate the application title from the current view, keeping its context
-	// immediately above the panel.
-	for len(header) > 1 && header[len(header)-1] == "" {
-		header = header[:len(header)-1]
+	// Wrap full navigation context immediately above the panel.
+	var context []string
+	for _, line := range header[1:] {
+		if line != "" {
+			context = append(context, line)
+		}
 	}
-	header = append([]string{header[0], ""}, header[1:]...)
-	if u.compareBase != nil {
-		prefix := fmt.Sprintf("Compare base: %.8s  ", u.compareBase.id)
-		header = append(header, prefix+browserPath(u.compareBaseLabel, max(1, width-1-len(prefix))))
+	if len(context) == 0 {
+		context = append(context, header[0])
 	}
-	lines := append(header, browserPanel(content, width)...)
-	lines = append(lines, "")
-	lines = append(lines, footer...)
-	if u.message != "" {
-		lines = append(lines, "", u.message)
+	breadcrumb := strings.Join(context, " › ")
+	if u.filterInput == nil && u.searchInput == nil && u.restoreToInput == nil && u.pendingDelete == nil && u.pendingFileDelete == nil && u.datePicker == nil && !u.showHelp && u.streamDiff == nil {
+		breadcrumb = u.browserBreadcrumb()
+	}
+	header = []string{"hoba-light browser · " + Version(), ""}
+	if height < 14 {
+		header = header[:1]
+	}
+	var wrappedFooter []string
+	for _, line := range footer {
+		wrappedFooter = append(wrappedFooter, wrapBrowserHelp(line, max(8, width-3))...)
+	}
+	footer = wrappedFooter
+	if height < 16 && u.canFilter() && u.filterInput == nil {
+		footer = []string{browserClip("↑/↓ · Enter · ← · ? help · q quit", max(8, width-3))}
+	}
+	if u.filter != nil {
+		if u.filterInput == nil && u.canFilter() && u.filterCount() == 0 {
+			content = []string{content[0], "No matching rows."}
+		}
+	}
+	if breadcrumb != "" {
+		header = append(header, wrapBrowserBreadcrumb(breadcrumb, max(8, width-3))...)
+	}
+	lines := browserIndented(header, width)
+	panel := browserFrame(content, contentWidth, u.canFilter() && u.filterInput == nil, u.streamDiff != nil)
+	for i := len(contentRules) - 1; i >= 0; i-- {
+		after := contentRules[i]
+		panel = append(panel[:after+1], append([]browserPanelLine{{separator: true}}, panel[after+1:]...)...)
+	}
+	boxed := browserBox(panel, contentWidth)
+	for _, line := range boxed {
+		lines = append(lines, line)
+	}
+	lines = append(lines, browserIndented(footer, width)...)
+	if u.message != "" && (u.streamDiff == nil || u.streamDiff.contentID == "" || strings.HasPrefix(u.message, "Error:")) {
+		lines = append(lines, u.message)
 	}
 	for i, line := range lines {
-		lines[i] = browserClip(line, max(8, width-1))
+		lines[i] = browserClip(line, max(8, width))
 	}
 	return strings.Join(lines, "\n") + "\n"
 }
@@ -132,10 +218,10 @@ func (u *browserUI) view(width, height int) string {
 func fileDetails(f sessionFile, width int) []string {
 	created := "unavailable"
 	if f.metadata.Created != nil {
-		created = *f.metadata.Created
+		created = displayTimestamp(*f.metadata.Created)
 	}
 	lines := wrapBrowserText("Path: "+f.metadata.Path, max(8, width-5))
-	lines = append(lines, fmt.Sprintf("Size: %d bytes", f.metadata.Size), "Created: "+created, "Modified: "+f.metadata.Modified, "File object: "+f.id[:8])
+	lines = append(lines, fmt.Sprintf("Size: %d bytes", f.metadata.Size), "Created: "+created, "Modified: "+displayTimestamp(f.metadata.Modified), "File object: "+f.id[:8])
 	if f.metadata.Error != "" {
 		return append(lines, wrapBrowserText("Error: "+f.metadata.Error, max(8, width-5))...)
 	}
@@ -146,9 +232,6 @@ func fileDetails(f sessionFile, width int) []string {
 }
 
 func (u *browserUI) directoryList(width, visible int) []string {
-	if len(u.entries) == 0 {
-		return []string{"No files."}
-	}
 	visible = max(1, visible-1)
 	table, ok := u.directoryTables[u.current]
 	if !ok { // Standalone views may provide entries without a loaded tree.
@@ -156,45 +239,39 @@ func (u *browserUI) directoryList(width, visible int) []string {
 		for _, entry := range u.entries {
 			stats = append(stats, entryStats(entry))
 		}
-		table = newListingTable(nil, stats)
+		table = newListingTable(browserEntryNames(u.entries), stats)
 	}
 	start := max(0, u.cursor-visible+1)
 	end := min(len(u.entries), start+visible)
-	lines := []string{"  " + table.header(false, max(8, width-7))}
+	if u.compareBase != nil {
+		table.name += len("[compare base] ")
+	}
+	lines := []string{" " + table.header(false, width)}
+	if len(u.entries) == 0 {
+		return append(lines, "No files.")
+	}
 	for i := start; i < end; i++ {
 		entry := u.entries[i]
 		name, hash := entryColumns(entry)
 		if !entry.directory && entry.file != nil && u.isComparisonBase(entry.file.id, "") || entry.directory && u.ref != nil && u.isComparisonBase(u.ref.Session, strings.Trim(u.current+"/"+entry.name, "/")) {
 			name = "[compare base] " + name
 		}
-		row := table.row(name, hash, entryStats(entry), max(8, width-7))
+		row := table.row(name, hash, entryStats(entry), width)
 		lines = append(lines, selectionMarker(i == u.cursor)+row)
 	}
-	if len(u.entries) > visible {
-		lines = append(lines, fmt.Sprintf("%d/%d", u.cursor+1, len(u.entries)))
-	}
+
 	return lines
 }
 
 func selectionMarker(selected bool) string {
 	if selected {
-		return "> "
+		return ">"
 	}
-	return "  "
+	return " "
 }
 
-// Group headers have no selection index. Only visible sessions are formatted.
+// Every session is one selectable table row, including its comment.
 func (u *browserUI) sessionList(width, visible int) []string {
-	if len(u.refs) == 0 {
-		return []string{"No backup sessions."}
-	}
-	type row struct {
-		text    string
-		session int
-	}
-	var rows []row
-	positions := make([]int, len(u.refs))
-	headers := make(map[int]bool)
 	if u.stats == nil {
 		if u.store != nil {
 			u.stats = u.store.referenceStats(u.refs)
@@ -214,71 +291,123 @@ func (u *browserUI) sessionList(width, visible int) []string {
 		u.sessionTable = &table
 	}
 	table := *u.sessionTable
-	visible = max(1, visible-1)
-	for i, ref := range u.refs {
-		if i == 0 || ref.Directory != u.refs[i-1].Directory {
-			if i > 0 {
-				rows = append(rows, row{session: -1})
-			}
-			headers[len(rows)] = true
-			rows = append(rows, row{text: ref.Directory, session: -1})
-		}
-		positions[i] = len(rows)
-		rows = append(rows, row{session: i})
-	}
-	selected := positions[u.cursor]
-	start := 0
-	var lines []string
-	if visible == 1 {
-		start = selected
-	} else {
-		if selected >= visible {
-			start = max(0, selected-visible+2)
-		}
-		if start > 0 && !headers[start] {
-			if rows[start].text == "" && rows[start].session < 0 {
-				start++
-			}
-			if !headers[start] {
-				context := 0
-				for context < len(positions)-1 && positions[context] < start {
-					context++
-				}
-				lines = append(lines, browserPath(u.refs[context].Directory, max(8, width-5)))
-			}
-		}
-	}
-	end := min(len(rows), start+visible-len(lines))
-	if end <= selected {
-		end = selected + 1
-	}
-	for _, row := range rows[start:end] {
-		if row.session < 0 {
-			lines = append(lines, browserPath(row.text, max(8, width-5)))
-			continue
-		}
-		ref := u.refs[row.session]
-		mark := ""
+	rowWidth := width
+	// Trailing columns stay together; only Started expands with the terminal.
+	commentWidth := len("Comment")
+	commentMinimum := len("Comment")
+	for _, ref := range u.refs {
+		commentWidth = max(commentWidth, runewidth.StringWidth(u.sessionComment(ref)))
 		if u.isComparisonBase(ref.Session, "") {
-			mark = "[compare base] "
+			commentMinimum = len("[compare base]")
 		}
-		label := table.row(mark+sessionTime(ref), ref.Session[:8], u.stats[ref.Session], max(8, width-7))
-		lines = append(lines, selectionMarker(row.session == u.cursor)+label)
 	}
-	if len(rows) > visible {
-		lines = append(lines, fmt.Sprintf("%d/%d", u.cursor+1, len(u.refs)))
+	suffixWidth := 8 + 2 + table.files + 2 + table.errors + 2 + table.size
+	commentWidth = min(commentWidth, 32, max(commentMinimum, rowWidth-26-2-suffixWidth-2))
+	baseWidth := rowWidth - commentWidth - 2
+	heading := table.header(true, baseWidth)
+	if rowWidth > baseWidth+2 {
+		heading += "  " + browserRight("Comment", rowWidth-baseWidth-2)
 	}
-	lines = append([]string{"  " + table.header(true, max(8, width-7))}, lines...)
+	lines := []string{" " + heading}
+	if len(u.refs) == 0 {
+		return append(lines, "No backup sessions.")
+	}
+	visible = max(1, visible-1)
+	start := max(0, u.cursor-visible+1)
+	for i := start; i < min(len(u.refs), start+visible); i++ {
+		ref := u.refs[i]
+		comment := u.sessionComment(ref)
+		row := table.row(sessionTime(ref), ref.Session[:8], u.stats[ref.Session], baseWidth)
+		if rowWidth > baseWidth+2 {
+			row += "  " + browserRight(browserComment(comment, rowWidth-baseWidth-2), rowWidth-baseWidth-2)
+		}
+		lines = append(lines, selectionMarker(i == u.cursor)+row)
+	}
+
 	return lines
 }
 
-func browserPanel(lines []string, width int) []string {
-	inner := max(8, width-5)
-	result := []string{"┌" + strings.Repeat("─", inner+2) + "┐"}
-	for _, line := range lines {
-		line = browserClip(line, inner)
-		padding := max(0, inner-runewidth.StringWidth(line))
-		result = append(result, "│ "+line+strings.Repeat(" ", padding)+" │")
+func (u *browserUI) sessionComment(ref Reference) string {
+	comment := browserText(ref.Comment)
+	if u.source == "" {
+		comment = ref.Directory + commentSuffix(ref.Comment)
 	}
-	return append(result, "└"+strings.Repeat("─", inner+2)+"┘")
+	if u.isComparisonBase(ref.Session, "") {
+		comment = "[compare base] " + comment
+	}
+	return comment
+}
+
+func (u *browserUI) listHeight(width, height int) int {
+	footer := len(wrapBrowserHelp(u.briefHelp(), max(8, width-3)))
+	message := 0
+	if u.message != "" {
+		message = 1
+	}
+	crumbRows := 0
+	if crumb := u.browserBreadcrumb(); crumb != "" {
+		crumbRows = len(wrapBrowserBreadcrumb(crumb, max(8, width-3)))
+	}
+	return max(1, height-6-footer-message-crumbRows)
+}
+
+// Keep each shortcut together instead of breaking words across terminal rows.
+func wrapBrowserHelp(help string, width int) []string {
+	var lines []string
+	for _, action := range strings.Split(help, " · ") {
+		if len(lines) > 0 && runewidth.StringWidth(lines[len(lines)-1]+" · "+action) <= width {
+			lines[len(lines)-1] += " · " + action
+			continue
+		}
+		lines = append(lines, wrapBrowserText(action, width)...)
+	}
+	return lines
+}
+
+// Rows carry a selection marker displayed in the first column inside the frame.
+func browserFrame(content []string, width int, table, viewer bool) []browserPanelLine {
+	var lines []browserPanelLine
+	for i, line := range content {
+		if !(table || viewer) || (!strings.HasPrefix(line, " ") && !strings.HasPrefix(line, ">")) {
+			line = " " + line
+		}
+		lines = append(lines, browserPanelLine{text: browserClip(line, max(8, width+1))})
+		if table && i == 0 {
+			lines = append(lines, browserPanelLine{separator: true})
+		}
+	}
+	return lines
+}
+
+func browserIndented(lines []string, width int) []string {
+	result := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if line != "" {
+			line = browserClip(line, max(8, width))
+		}
+		result = append(result, line)
+	}
+	return result
+}
+
+func browserTextColumns(name, value string, width, valueWidth int) string {
+	nameWidth := max(1, width-valueWidth-2)
+	name = browserPath(name, nameWidth)
+	return name + strings.Repeat(" ", max(0, nameWidth-runewidth.StringWidth(name))) + "  " + browserRight(value, valueWidth)
+}
+
+func browserRight(text string, width int) string {
+	text = browserClip(text, width)
+	return strings.Repeat(" ", max(0, width-runewidth.StringWidth(text))) + text
+}
+
+func browserComment(text string, width int) string {
+	const marker = "[compare base]"
+	if strings.HasPrefix(text, marker+" ") {
+		if width <= len(marker) {
+			return browserClip(marker, width)
+		}
+		return marker + " " + browserPath(strings.TrimPrefix(text, marker+" "), width-len(marker)-1)
+	}
+	return browserPath(text, width)
 }

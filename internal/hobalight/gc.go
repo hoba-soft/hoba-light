@@ -1,8 +1,10 @@
 package hobalight
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"time"
 )
 
@@ -29,6 +31,7 @@ func (s *Store) gcOptions(output io.Writer, dryRun, verbose bool) error {
 	if err != nil {
 		return fmt.Errorf("gc aborted before moving objects: %w", err)
 	}
+	edges := make(map[string][]string)
 	reachable := make(map[string]bool)
 	var queue []string
 	for _, id := range order {
@@ -43,6 +46,7 @@ func (s *Store) gcOptions(output io.Writer, dryRun, verbose bool) error {
 		if err != nil {
 			return fmt.Errorf("gc aborted before moving objects: object %s: %w", id, err)
 		}
+		edges[id] = references
 		for _, reference := range references {
 			if !objects[reference] {
 				return fmt.Errorf("gc aborted before moving objects: object %s references missing object %s", id, reference)
@@ -53,18 +57,71 @@ func (s *Store) gcOptions(output io.Writer, dryRun, verbose bool) error {
 			}
 		}
 	}
-	moved := 0
-	var movedBytes, retainedBytes int64
+
+	expired, err := s.expiredSessions(order, time.Now())
+	if err != nil {
+		return fmt.Errorf("gc retention aborted before moving objects: %w", err)
+	}
+	deleting := map[string]bool{}
+	for _, session := range expired {
+		deleting[session.id] = true
+	}
+	if len(expired) > 0 {
+		reachable = make(map[string]bool)
+		queue = nil
+		for _, id := range order {
+			if validID(id, 'S') && !deleting[id] {
+				reachable[id] = true
+				queue = append(queue, id)
+			}
+		}
+		for head := 0; head < len(queue); head++ {
+			for _, child := range edges[queue[head]] {
+				if !reachable[child] {
+					reachable[child] = true
+					queue = append(queue, child)
+				}
+			}
+		}
+	}
+	// Collect sizes before any mutation, including the session roots to retire.
+	sizes := map[string]int64{}
 	for _, id := range order {
 		info, err := s.backend.Stat(objectKey(id))
 		if err != nil {
 			return err
 		}
-		if reachable[id] {
-			retainedBytes += info.Size()
+		sizes[id] = info.Size()
+	}
+	for _, session := range expired {
+		if dryRun {
+			fmt.Fprintf(output, "Would delete session %s  %s  %q  retention\n", session.id, displayTimestamp(timestamp(session.started)), session.source)
 			continue
 		}
-		movedBytes += info.Size()
+		if err := s.trashObject(session.id, "deleted"); err != nil {
+			return fmt.Errorf("gc retention stopped: %w", err)
+		}
+		s.sessionListings = nil
+		for _, name := range session.references {
+			if err := s.backend.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return fmt.Errorf("session %s retired; reference cleanup failed: %w", session.id, err)
+			}
+		}
+		s.sessionListings = nil
+		fmt.Fprintf(output, "Deleted session %s  retention\n", session.id)
+	}
+	moved := 0
+	var movedBytes, retainedBytes int64
+	for _, id := range order {
+		if reachable[id] {
+			retainedBytes += sizes[id]
+			continue
+		}
+		movedBytes += sizes[id]
+		if deleting[id] {
+			moved++
+			continue
+		}
 		if dryRun {
 			moved++
 			if verbose {

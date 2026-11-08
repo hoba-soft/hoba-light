@@ -131,7 +131,7 @@ func TestDeleteFileAcrossAllSessionObjects(t *testing.T) {
 }
 
 func TestBrowserGlobalFileDeletion(t *testing.T) {
-	for _, navigation := range []string{"\r", "\r\r", "/target\r"} {
+	for _, navigation := range []string{"\r", "\r\r", "ntarget\r"} {
 		t.Run(navigation, func(t *testing.T) {
 			c := newCLI(t)
 			writeFile(t, filepath.Join(c.source, "target.txt"), []byte("data"))

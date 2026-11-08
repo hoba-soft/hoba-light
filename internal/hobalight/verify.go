@@ -185,6 +185,13 @@ func (v *verifier) session(id string) {
 	if v.issues > startIssues {
 		v.damaged++
 		status = "DAMAGED"
+	} else if session.completionStatus() == sessionFailed {
+		if v.backupErrors == startBackup {
+			v.backupErrors++
+			v.print("Backup error session %s: session failed\n", id)
+		}
+		v.incomplete++
+		status = "FAILED"
 	} else if v.backupErrors > startBackup {
 		v.incomplete++
 		status = "INCOMPLETE"

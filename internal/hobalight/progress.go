@@ -25,6 +25,12 @@ func (p progressUpdate) text() string {
 	if p.total < 0 && p.operation == "Verify" {
 		return fmt.Sprintf("Verify: %d objects checked, %d issues", p.done, p.errors)
 	}
+	if p.total < 0 && p.operation == "Restore" {
+		if p.done == 0 {
+			return "Restore: preparing files"
+		}
+		return fmt.Sprintf("Restore: preparing files (%d checked)", p.done)
+	}
 	if p.total < 0 {
 		return fmt.Sprintf("%s: counting files (%d found)", label, p.done)
 	}

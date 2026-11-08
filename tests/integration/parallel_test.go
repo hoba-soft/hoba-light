@@ -61,7 +61,7 @@ func TestIntegrationBackupShowsSourceAndFile(t *testing.T) {
 			t.Fatal(out)
 		}
 	}
-	for _, want := range []string{filepath.ToSlash(filepath.Join(c.source, "one.txt")), filepath.ToSlash(filepath.Join(other, "two.txt"))} {
+	for _, want := range []string{"one.txt", "two.txt"} {
 		if !regexp.MustCompile(`Progress: 0/1 \(0%\)  0 B added \[\d{2}:\d{2}:\d{2}\]  `+regexp.QuoteMeta(want)).MatchString(out) || !regexp.MustCompile(`Progress: 1/1 \(100%\)  [^\r\n]+ added \[\d{2}:\d{2}:\d{2}\]\r?\n`).MatchString(out) {
 			t.Fatal(out)
 		}

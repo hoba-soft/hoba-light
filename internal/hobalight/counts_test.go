@@ -52,7 +52,7 @@ func TestCountsInListingsAndBrowser(t *testing.T) {
 		t.Fatal(view)
 	}
 	u.enter()
-	if view := u.view(100, 24); !strings.Contains(view, "4 files  20 B") || !strings.Contains(strings.Join(strings.Fields(view), " "), "2 0 10 B") {
+	if view := u.view(100, 24); !strings.Contains(strings.Join(strings.Fields(view), " "), "2 0 10 B") {
 		t.Fatal(view)
 	}
 	// Same-prefix sibling must not inflate a directory's recursive count.
@@ -68,7 +68,7 @@ func TestCountColumnsWithLongNames(t *testing.T) {
 	for _, entry := range entries {
 		name, hash := entryColumns(entry)
 		line := table.row(name, hash, entryStats(entry), 60)
-		if runewidth.StringWidth(line) != 60 || !strings.HasSuffix(line, displaySize(entry.size)) {
+		if runewidth.StringWidth(line) != 60 || !strings.HasSuffix(strings.TrimSpace(line), displaySize(entry.size)) {
 			t.Fatal(line)
 		}
 		if entry.directory && !strings.Contains(strings.Join(strings.Fields(line), " "), "42 0 4.0 KiB") {

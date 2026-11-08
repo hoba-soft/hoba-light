@@ -27,13 +27,13 @@ func modificationDetails(before, after File) []string {
 		if value == nil {
 			return "unavailable"
 		}
-		return *value
+		return displayTimestamp(*value)
 	}
 	if (before.Created == nil) != (after.Created == nil) || before.Created != nil && after.Created != nil && *before.Created != *after.Created {
 		details = append(details, "created: "+created(before.Created)+" -> "+created(after.Created))
 	}
 	if before.Modified != after.Modified {
-		details = append(details, "modified: "+before.Modified+" -> "+after.Modified)
+		details = append(details, "modified: "+displayTimestamp(before.Modified)+" -> "+displayTimestamp(after.Modified))
 	}
 	return details
 }

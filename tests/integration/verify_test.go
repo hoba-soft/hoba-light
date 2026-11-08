@@ -48,7 +48,7 @@ func TestVerifyScopedAndIncomplete(t *testing.T) {
 	if err == nil {
 		t.Fatal("incomplete session passed")
 	}
-	requireOutput(t, out, "INCOMPLETE", "0 integrity issues", "Backup error")
+	requireOutput(t, out, "FAILED", "0 integrity issues", "Backup error")
 	// The older session points at the now missing original blob and is damaged.
 	out, err = c.command(nil, "verify", before)
 	if err == nil {

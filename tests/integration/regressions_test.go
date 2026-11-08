@@ -20,7 +20,7 @@ func TestIntegrationForceReportsBlobPublishFailure(t *testing.T) {
 	makeDir(t, blob)
 	// A nonempty directory cannot be replaced by the temporary ZIP on either OS.
 	writeFile(t, filepath.Join(blob, "obstruction"), []byte("keep"))
-	c.fails("session incomplete", "backup", "--force", c.source)
+	c.fails("session failed", "backup", "--force", c.source)
 	refs := c.refs()
 	session := c.session(latestRef(refs).Session)
 	if len(session.Files) != 1 || len(session.Errors) != 1 || !strings.Contains(session.Errors[0], "publish blob") {

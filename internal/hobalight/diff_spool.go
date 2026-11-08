@@ -13,8 +13,9 @@ import (
 )
 
 type diffPacket struct {
-	row []byte
-	err error
+	row    []byte
+	header []string
+	err    error
 }
 type diffRowWriter struct {
 	ctx     context.Context
@@ -34,6 +35,20 @@ func (w *diffRowWriter) flush() error {
 		return nil
 	}
 }
+
+// Headers travel beside body records and never occupy a searchable row.
+func (w *diffRowWriter) setContentHeader(header []string) error {
+	if err := w.flush(); err != nil {
+		return err
+	}
+	select {
+	case <-w.ctx.Done():
+		return w.ctx.Err()
+	case w.rows <- diffPacket{header: append([]string(nil), header...)}:
+		return nil
+	}
+}
+
 func (w *diffRowWriter) Write(p []byte) (int, error) {
 	total := len(p)
 	for len(p) > 0 {
@@ -61,6 +76,7 @@ type diffSpool struct {
 	cancel      context.CancelFunc
 	finished    chan struct{}
 	count       int
+	header      []string
 	offset      int64
 	done        bool
 	err         error
@@ -136,6 +152,10 @@ func (d *diffSpool) ensure(n int) {
 			d.done = true
 			d.err = p.err
 			return
+		}
+		if p.header != nil {
+			d.header = p.header
+			continue
 		}
 		var offset [8]byte
 		binary.LittleEndian.PutUint64(offset[:], uint64(d.offset))

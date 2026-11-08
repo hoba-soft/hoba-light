@@ -17,10 +17,10 @@ func Run(args []string) error {
 		if arg == "--" || !strings.HasPrefix(arg, "-") {
 			break
 		}
-		if !strings.HasPrefix(arg, "--") || arg == "--h" {
+		if (!strings.HasPrefix(arg, "--") && arg != "-c" && !strings.HasPrefix(arg, "-c=")) || arg == "--h" {
 			return fmt.Errorf("unknown option %q: use long options beginning with --", arg)
 		}
-		if arg == "--config" || arg == "--exclude" {
+		if arg == "--config" || arg == "--exclude" || arg == "-c" || arg == "--comment" {
 			i++
 		}
 	}
@@ -28,6 +28,8 @@ func Run(args []string) error {
 	global := flag.NewFlagSet("hobalight", flag.ContinueOnError)
 	configName := os.Getenv("HOBALIGHT_CONFIG")
 	showVersion := global.Bool("version", false, "Print binary version and platform")
+	comment := global.String("comment", "", "Session comment for backup")
+	global.StringVar(comment, "c", "", "Session comment for backup")
 	config := global.String("config", configName, "YAML configuration file (overrides HOBALIGHT_CONFIG; relative to working directory)")
 	var excludes []string
 	excludesSet := false
@@ -42,7 +44,7 @@ func Run(args []string) error {
 	})
 	global.Usage = func() {
 		fmt.Fprintln(global.Output(), commandHelp)
-		fmt.Fprintln(global.Output(), "  --help             Show help\n  --version          Show version and platform\n  --config file      Configuration file (overrides HOBALIGHT_CONFIG)\n  --exclude pattern  Repeatable exclusion; replaces environment/config list")
+		fmt.Fprintln(global.Output(), "  --help             Show help\n  --version          Show version and platform\n  --config file      Configuration file (overrides HOBALIGHT_CONFIG)\n  --exclude pattern  Repeatable exclusion; replaces environment/config list\n  -c, --comment text Session comment for backup")
 	}
 	if err := global.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -51,6 +53,18 @@ func Run(args []string) error {
 		return err
 	}
 	args = global.Args()
+	commentSet := false
+	global.Visit(func(f *flag.Flag) {
+		if f.Name == "c" || f.Name == "comment" {
+			commentSet = true
+		}
+	})
+	withComment := func(args []string) []string {
+		if !commentSet {
+			return args
+		}
+		return append([]string{"--comment", *comment}, args...)
+	}
 	if *showVersion {
 		fmt.Printf("hobalight %s %s\n", Version(), Platform())
 		return nil
@@ -80,6 +94,16 @@ func Run(args []string) error {
 			return err
 		}
 	}
+	if commentSet && args[0] != "backup" {
+		if len(args) != 1 {
+			return errors.New("--comment/-c is only available for backup")
+		}
+		for _, command := range []string{"info", "browse", "restore", "restore-to", "delete", "verify", "gc", "refresh", "history", "find", "list", "view", "diff"} {
+			if args[0] == command {
+				return errors.New("--comment/-c is only available for backup")
+			}
+		}
+	}
 	if args[0] == "info" {
 		if len(args) != 1 {
 			return errors.New("usage: info")
@@ -87,6 +111,16 @@ func Run(args []string) error {
 		return printInfo(c, os.Stdout)
 	}
 
+	date := ""
+	switch args[0] {
+	case "list", "find", "history", "browse":
+		var positional []string
+		positional, date, err = sessionDateArgs(args[1:])
+		if err != nil {
+			return err
+		}
+		args = append([]string{args[0]}, positional...)
+	}
 	if args[0] == "browse" && len(args) != 1 {
 		return errors.New("usage: browse")
 	}
@@ -111,6 +145,7 @@ func Run(args []string) error {
 	if err != nil {
 		return err
 	}
+	s.sessionDate = date
 	if args[0] == "browse" {
 		return s.browse(os.Stdin, os.Stdout, openFile)
 	}
@@ -120,10 +155,11 @@ func Run(args []string) error {
 	}
 	s.workers = c.Workers
 	s.trashRetentionDays = c.TrashRetentionDays
+	s.retention = c.Retention
 	s.progress = progressPrinter(os.Stderr)
 	switch args[0] {
 	case "backup":
-		return s.backupCommand(args[1:], c.Directories, os.Stdout, os.Stderr)
+		return s.backupCommand(withComment(args[1:]), c.Directories, os.Stdout, os.Stderr)
 	case "restore", "restore-to":
 		return s.restoreCommand(args[1:], args[0] == "restore-to", os.Stdout)
 	case "delete":
@@ -156,7 +192,7 @@ func Run(args []string) error {
 		if len(args) == 1 {
 			_, pathErr := os.Stat(args[0])
 			if pathErr == nil || args[0] == "." || args[0] == ".." || strings.ContainsAny(args[0], `/\`) {
-				return s.backupCommand([]string{"--", args[0]}, c.Directories, os.Stdout, os.Stderr)
+				return s.backupCommand(withComment([]string{"--", args[0]}), c.Directories, os.Stdout, os.Stderr)
 			}
 		}
 		return fmt.Errorf("unknown command %q", args[0])

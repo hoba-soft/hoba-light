@@ -42,7 +42,7 @@ func (s *Store) referenceFromSession(id string, session Session) (Reference, err
 		seen[rel] = true
 		listing = append(listing, ReferenceFile{ID: fileID, Path: rel, Size: file.Size, Failed: file.Error != ""})
 	}
-	return Reference{Format: referenceFormat, Directory: session.Directory, Started: session.Started, Session: id, Files: &listing}, nil
+	return Reference{Comment: session.Comment, Status: session.completionStatus(), Errors: session.Errors, Format: referenceFormat, Directory: session.Directory, Started: session.Started, Session: id, Files: &listing}, nil
 }
 
 // Refresh regenerates derived references only; immutable objects are never written.

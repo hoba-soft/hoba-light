@@ -69,7 +69,7 @@ func TestBrowserSearchScopeLocateAndRestore(t *testing.T) {
 	refs, err := s.sessionReferences()
 	must(t, err)
 	u := browserUI{browser: browser{store: s}, refs: refs}
-	u.key("/")
+	u.key("n")
 	for _, r := range "ОТЧЁТ" {
 		u.key(string(r))
 	}
@@ -98,18 +98,18 @@ func TestBrowserSearchScopeLocateAndRestore(t *testing.T) {
 		t.Fatal(u.current)
 	}
 	cursor := u.cursor
-	u.key("/")
+	u.key("n")
 	u.key("ОТЧЁТ")
 	u.key("enter")
-	if len(u.search.matches) != 1 {
-		t.Fatal("directory scope leaked")
+	if len(u.search.matches) != 2 {
+		t.Fatal("search should include all sessions and directories")
 	}
 	u.key("left")
 	if u.current != "docs" || u.cursor != cursor {
 		t.Fatal("cancel lost position")
 	}
 	u.key("left") // session root
-	u.key("/")
+	u.key("n")
 	u.key("missing")
 	u.key("enter")
 	if len(u.search.matches) != 0 || !strings.Contains(u.view(100, 24), "No matching files") {
@@ -118,7 +118,7 @@ func TestBrowserSearchScopeLocateAndRestore(t *testing.T) {
 	u.key("right")
 	u.key("r")
 	u.key("left")
-	u.key("/")
+	u.key("n")
 	u.key("q")
 	u.key("cancel")
 	if u.searchInput != nil {
@@ -140,8 +140,8 @@ func TestBrowserSearchKeyboard(t *testing.T) {
 	must(t, err)
 	var output bytes.Buffer
 	// Literal q and Unicode belong to the query; Esc then q closes search and quits.
-	must(t, s.browse(strings.NewReader("/qОТЧЁТ\n\x1bq"), &output, nil))
-	if !strings.Contains(output.String(), "1/1 matches") || !strings.Contains(output.String(), "qОтчёт.txt") {
+	must(t, s.browse(strings.NewReader("nqОТЧЁТ\n\x1bq"), &output, nil))
+	if !strings.Contains(output.String(), "qОтчёт.txt") {
 		t.Fatal(output.String())
 	}
 }

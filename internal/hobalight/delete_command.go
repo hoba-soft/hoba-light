@@ -68,7 +68,7 @@ func (s *Store) executeFileDeletion(plan fileDeletion, output io.Writer) error {
 func fileDeletionDescription(plan fileDeletion) []string {
 	lines := []string{"Remove this file object from ALL sessions?", "File: " + plan.id, fmt.Sprintf("Path: %q", plan.file.Path), "Size: " + displaySize(plan.file.Size), fmt.Sprintf("Affected sessions: %d", len(plan.sessions))}
 	for _, ref := range plan.sessions {
-		lines = append(lines, fmt.Sprintf("%s  %s  %q", ref.Session, ref.Started, ref.Directory))
+		lines = append(lines, fmt.Sprintf("%s  %s  %q", ref.Session, displayTimestamp(ref.Started), ref.Directory))
 	}
 	return append(lines, "Affected session hashes will change; old sessions move to trash.", "Other file versions remain. File/blob objects stay until gc.")
 }
@@ -130,6 +130,9 @@ func (s *Store) deleteCommand(args []string, input io.Reader, output io.Writer) 
 			return nil
 		}
 		for _, line := range fileDeletionDescription(plan) {
+			if force && line == "Remove this file object from ALL sessions?" {
+				line = "Removing this file object from ALL sessions."
+			}
 			fmt.Fprintln(output, line)
 		}
 	} else {
@@ -137,7 +140,7 @@ func (s *Store) deleteCommand(args []string, input io.Reader, output io.Writer) 
 		if err := s.read(id, 'S', &session); err != nil {
 			return err
 		}
-		fmt.Fprintf(output, "Session: %s\nStarted: %s\nSource: %q\nFiles: %d\n", id, session.Started, session.Directory, len(session.Files))
+		fmt.Fprintf(output, "Session: %s\nStarted: %s\nSource: %q\nFiles: %d\n", id, displayTimestamp(session.Started), session.Directory, len(session.Files))
 		if len(positional) == 2 {
 			selected, err := userRelative(positional[1])
 			if err != nil {
@@ -152,6 +155,8 @@ func (s *Store) deleteCommand(args []string, input io.Reader, output io.Writer) 
 				return errors.New("path not found in session")
 			}
 			fmt.Fprintf(output, "Remove path: %q (%s)\nSession hash will change; old session moves to trash.\n", positional[1], displayCount(count))
+		} else if force {
+			fmt.Fprintln(output, "Deleting this entire session and its references.")
 		} else {
 			fmt.Fprintln(output, "Delete this entire session and its references?")
 		}
