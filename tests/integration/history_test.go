@@ -62,12 +62,12 @@ func TestHistoryBrowser(t *testing.T) {
 			local := *c
 			local.t = t
 			out := local.interact(testBinary, navigation+"v\x1b[B\r\x1b[B\r\rq", nil)
-			requireOutput(t, out, "File history:", "1/2 versions", "2 sessions", "Version: "+oldFile[:8], "Located target.txt", "File object: "+oldFile[:8])
+			requireOutput(t, out, "File history:", "2 sessions", "Version: "+oldFile[:8], "Located target.txt", "File object: "+oldFile[:8])
 		})
 	}
 	// Restore directly from the older grouped version, without leaving history.
 	out := c.interact(testBinary, "\r\x1b[Fv\x1b[Btold-version\rq", nil)
-	requireOutput(t, out, "Restored 1 files")
+	requireOutput(t, out, "Restored 1 file")
 	assertTree(t, filepath.Join(c.root, "old-version"), map[string][]byte{"target.txt": []byte("old version")})
 	// Escape/back returns from sessions to versions, then to the original file list.
 	out = c.interact(testBinary, "\r\x1b[Fv\r\x1b[D\x1b[D\rq", nil)

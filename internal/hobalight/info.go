@@ -21,6 +21,7 @@ func printInfo(c Config, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "hobalight %s %s\n\nPaths:\n  executable: %q\n  working_directory: %q\n  config: %q\n", Version(), Platform(), binary, cwd, c.path)
 	fmt.Fprintf(out, "\nEffective settings:\n  storage: %q (%s)\n  directories: %q (%s)\n  workers: %d (%s)\n  exclude: %q (%s)\n  trash_retention_days: %d (%s)\n", c.Storage, c.sources["storage"], c.Directories, c.sources["directories"], c.Workers, c.sources["workers"], c.Exclude, c.sources["exclude"], c.TrashRetentionDays, c.sources["trash_retention_days"])
+	fmt.Fprintf(out, "  retention: {days: %d, sessions: %d} (%s)\n", c.Retention.Days, c.Retention.Sessions, c.sources["retention"])
 	fmt.Fprintln(out, "\nStorage paths:")
 	for _, name := range []string{storeMarker, "objects", "sessions", "trash", "logs"} {
 		fmt.Fprintf(out, "  %s: %q\n", name, filepath.Join(c.Storage, name))

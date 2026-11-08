@@ -101,8 +101,11 @@ func TestIntegrationSnapshotLifecycle(t *testing.T) {
 	assertTree(t, single, map[string][]byte{"nested/space name.txt": []byte("same")})
 	c.ok("restore-to", latest[:8], ".", dest)
 	assertTree(t, dest, current)
-	if out := c.ok("list"); strings.Count(out, " UTC  ") != 3 {
-		t.Fatal(out)
+	out := c.ok("list")
+	for _, ref := range c.refs() {
+		if strings.Count(out, ref.Session[:8]) != 1 {
+			t.Fatal(out)
+		}
 	}
 }
 
@@ -124,7 +127,7 @@ func TestIntegrationEmptyAndFailedSources(t *testing.T) {
 	c.fails("outside storage", "backup", c.storage)
 	file := filepath.Join(c.root, "regular")
 	writeFile(t, file, []byte("x"))
-	c.fails("must be a directory", "backup", file)
+	c.ok("backup", file)
 }
 
 func TestIntegrationMissingBlobIsRebuilt(t *testing.T) {

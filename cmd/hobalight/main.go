@@ -10,6 +10,6 @@ import (
 func main() {
 	if err := hobalight.Run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		os.Exit(hobalight.ExitCode(err))
 	}
 }

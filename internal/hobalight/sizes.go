@@ -110,7 +110,7 @@ func sizeColumnWidth(names, sizes []string) int {
 func hashSizeColumn(name, hash, size string, width, sizeWidth int) string {
 	suffix := size
 	sizeWidth = max(sizeWidth, runewidth.StringWidth(suffix))
-	right := fmt.Sprintf("%8s  %s%s", hash, strings.Repeat(" ", sizeWidth-runewidth.StringWidth(suffix)), suffix)
+	right := fmt.Sprintf("%8s  %s", hash, browserRight(suffix, sizeWidth))
 	available := width - runewidth.StringWidth(right) - 2
 	if available < 1 {
 		return sizeColumn(name, size, width)

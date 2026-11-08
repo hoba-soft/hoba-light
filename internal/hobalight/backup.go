@@ -26,15 +26,15 @@ func (s *Store) failedFile(name string, info os.FileInfo, cause error) (string, 
 	ident.Error = cause.Error()
 	key, err := encode(ident)
 	if err != nil {
-		return "", errors.Join(cause, err)
+		return "", fmt.Errorf("save failure metadata: %v: %w", cause, err)
 	}
 	data, err := encode(File{Identity: ident})
 	if err != nil {
-		return "", errors.Join(cause, err)
+		return "", fmt.Errorf("save failure metadata: %v: %w", cause, err)
 	}
 	id := hash(key) + "F"
 	if err := s.put(id, data); err != nil {
-		return "", errors.Join(cause, fmt.Errorf("save failure metadata: %w", err))
+		return "", fmt.Errorf("save failure metadata: %v: %w", cause, err)
 	}
 	return id, cause
 }
@@ -46,7 +46,11 @@ func (s *Store) backupFile(name string, info os.FileInfo, force bool) (string, e
 func (s *Store) backupFileTracked(name string, info os.FileInfo, force bool, writes *backupFileWrites) (id string, failure error) {
 	defer func() {
 		if failure != nil {
-			id, failure = s.failedFile(name, info, failure)
+			cause := failure
+			id, failure = s.failedFile(name, info, cause)
+			if !isSourceFailure(cause) && id != "" {
+				failure = cause
+			}
 		}
 	}()
 	ident := identity(name, info)
@@ -59,7 +63,7 @@ func (s *Store) backupFileTracked(name string, info os.FileInfo, force bool, wri
 	var cached File
 	if err := s.read(id, 'F', &cached); err == nil {
 		if !force {
-			if info, err := s.backend.Stat(objectKey(cached.Blob)); err == nil && info.Mode().IsRegular() {
+			if info, err := s.backend.Inspect(objectKey(cached.Blob)); err == nil && info.Mode().IsRegular() {
 				s.logger.Printf("reuse path=%q file=%s blob=%s reason=unchanged_metadata", ident.Path, id, cached.Blob)
 				writes.reused = true
 				return id, nil
@@ -70,9 +74,16 @@ func (s *Store) backupFileTracked(name string, info os.FileInfo, force bool, wri
 	}
 	input, err := os.Open(name)
 	if err != nil {
-		return "", err
+		return "", sourceFailure(err)
 	}
 	defer input.Close()
+	opened, err := input.Stat()
+	if err != nil {
+		return "", sourceFailure(err)
+	}
+	if !sameSourceFile(info, opened) {
+		return "", sourceFailure(errors.New("source file changed after scanning; retry backup"))
+	}
 	compressed, err := newStorageStage(s.backend, ".blob-*")
 	if err != nil {
 		return "", err
@@ -85,9 +96,25 @@ func (s *Store) backupFileTracked(name string, info os.FileInfo, force bool, wri
 		return "", err
 	}
 	h := sha256.New()
-	if _, err = io.Copy(io.MultiWriter(entry, h), input); err != nil {
-		zw.Close()
+	written, err := io.Copy(io.MultiWriter(entry, h), sourceReader{input})
+	if err != nil {
+		if closeErr := zw.Close(); closeErr != nil {
+			return "", fmt.Errorf("close blob after %v: %w", err, closeErr)
+		}
 		return "", err
+	}
+	after, err := input.Stat()
+	if err != nil {
+		if closeErr := zw.Close(); closeErr != nil {
+			return "", closeErr
+		}
+		return "", sourceFailure(err)
+	}
+	if written != ident.Size || !sameSourceFile(opened, after) {
+		if closeErr := zw.Close(); closeErr != nil {
+			return "", closeErr
+		}
+		return "", sourceFailure(errors.New("source file changed while reading; retry backup"))
 	}
 	if err = zw.Close(); err != nil {
 		return "", err
@@ -104,9 +131,12 @@ func (s *Store) backupFileTracked(name string, info os.FileInfo, force bool, wri
 	}
 	blob := hex.EncodeToString(h.Sum(nil)) + "B"
 	target := objectKey(blob)
-	_, statErr := s.backend.Stat(target)
+	stored, statErr := s.backend.Inspect(target)
 	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 		return "", statErr
+	}
+	if statErr == nil && !stored.Mode().IsRegular() && !force {
+		return "", fmt.Errorf("publish blob %s: existing object is not a regular file", blob)
 	}
 	// A forced backup replaces existing blobs, repairing any damaged copy.
 	if force || statErr != nil {
@@ -114,7 +144,7 @@ func (s *Store) backupFileTracked(name string, info os.FileInfo, force bool, wri
 		if err != nil {
 			// Without --force a concurrent writer may have published the same
 			// blob first; a forced backup must actually replace it.
-			if info, statErr := s.backend.Stat(target); force || statErr != nil || !info.Mode().IsRegular() {
+			if info, statErr := s.backend.Inspect(target); force || statErr != nil || !info.Mode().IsRegular() {
 				return "", fmt.Errorf("publish blob %s: %w", blob, err)
 			}
 			writes.reused = true
@@ -139,10 +169,20 @@ func (s *Store) backupFileTracked(name string, info os.FileInfo, force bool, wri
 	return id, nil
 }
 
+// Scanning and reading can be separated by other files and workers.
+func sameSourceFile(before, after os.FileInfo) bool {
+	return before != nil && after != nil && before.Mode().IsRegular() && after.Mode().IsRegular() &&
+		os.SameFile(before, after) && before.Size() == after.Size() && before.ModTime().Equal(after.ModTime())
+}
+
 func (s *Store) backup(dir string, force bool) (string, error) {
 	return s.backupWithSummary(dir, force, nil)
 }
 func (s *Store) backupWithSummary(dir string, force bool, summary *backupSummary) (string, error) {
+	return s.backupWithComment(dir, force, summary, "")
+}
+
+func (s *Store) backupWithComment(dir string, force bool, summary *backupSummary, comment string) (string, error) {
 	startedAt := time.Now()
 	if summary != nil {
 		*summary = backupSummary{}
@@ -163,14 +203,18 @@ func (s *Store) backupWithSummary(dir string, force bool, summary *backupSummary
 		return "", err
 	}
 	if linkInfo.Mode()&os.ModeSymlink != 0 {
-		return "", errors.New("source directory must not be a symlink")
+		return "", errors.New("backup source must not be a symlink")
 	}
 	info, err := os.Stat(abs)
 	if err != nil {
 		return "", err
 	}
+	if !info.IsDir() && !info.Mode().IsRegular() {
+		return "", errors.New("backup source must be a directory or regular file")
+	}
+	root := abs
 	if !info.IsDir() {
-		return "", errors.New("backup source must be a directory")
+		root = filepath.Dir(abs)
 	}
 	inStorage, err := storageExclusion(s.backend.LocalRoot(), abs)
 	if err != nil {
@@ -180,7 +224,10 @@ func (s *Store) backupWithSummary(dir string, force bool, summary *backupSummary
 	if summary != nil {
 		summary.baseline, previous, summary.comparisonError = s.previousBackup(portable(abs))
 	}
-	session := Session{Version: Version(), Platform: Platform(), Directory: portable(abs), Started: timestamp(time.Now()), Files: []string{}}
+	session := Session{Comment: comment, Version: Version(), Platform: Platform(), Directory: portable(root), Started: timestamp(time.Now()), Files: []string{}}
+	if !info.IsDir() {
+		session.Source = portable(abs)
+	}
 	fail := func(name string, err error) {
 		msg := fmt.Sprintf("%s: %v", portable(name), err)
 		session.Errors = append(session.Errors, msg)
@@ -202,8 +249,8 @@ func (s *Store) backupWithSummary(dir string, force bool, summary *backupSummary
 			}
 			return nil
 		}
-		if name != abs {
-			rel, err := filepath.Rel(abs, name)
+		if name != abs || !info.IsDir() {
+			rel, err := filepath.Rel(root, name)
 			if err != nil {
 				return err
 			}
@@ -264,7 +311,7 @@ func (s *Store) backupWithSummary(dir string, force bool, summary *backupSummary
 		s.reportBackup(completed, len(sources), file.name, errorCount, addedBytes)
 		progressMu.Unlock()
 		if file.err != nil {
-			results[i].id, results[i].err = s.failedFile(file.name, file.info, file.err)
+			results[i].id, results[i].err = s.failedFile(file.name, file.info, sourceFailure(file.err))
 		} else {
 			results[i].id, results[i].err = s.backupFileTracked(file.name, file.info, force, &results[i].writes)
 		}
@@ -325,17 +372,23 @@ func (s *Store) backupWithSummary(dir string, force bool, summary *backupSummary
 	if summary != nil && summary.comparisonError != nil {
 		summary.unclassified += summary.newFiles + summary.modified + summary.unchanged
 	}
+	session.Status = sessionCompleted
+	if len(session.Errors) > 0 {
+		session.Status = sessionCompletedWithErrors
+	}
+	for _, result := range results {
+		if result.err != nil && (!isSourceFailure(result.err) || result.id == "") {
+			session.Status = sessionFailed
+		}
+	}
 	data, err := encode(session)
 	if err != nil {
 		return "", err
 	}
 	id := hash(data) + "S"
-	if err = s.put(id, data); err != nil {
-		return "", err
-	}
 	reference, err := s.referenceFromSession(id, session)
 	if err != nil {
-		return "", err
+		return s.saveFailedBackup(session, err)
 	}
 	ref, err := encode(reference)
 	if err != nil {
@@ -343,13 +396,26 @@ func (s *Store) backupWithSummary(dir string, force bool, summary *backupSummary
 	}
 	started, _ := time.Parse(time.RFC3339Nano, session.Started)
 	name := sessionReferenceName(started, id)
+	if err = s.put(id, data); err != nil {
+		return s.saveFailedBackup(session, fmt.Errorf("save session: %w", err))
+	}
 	if err = writeStorageBytes(s.backend, "sessions/"+name, ref, false); err != nil {
-		return "", err
+		// A failed reference publication must not leave a successful root that
+		// refresh could later rediscover as a completed backup.
+		cause := fmt.Errorf("save session reference: %w", err)
+		s.logger.Printf("session failed: %v", cause)
+		if removeErr := s.backend.Remove(objectKey(id)); removeErr != nil {
+			return "", errors.Join(cause, fmt.Errorf("retire unpublished session %s: %w", id, removeErr))
+		}
+		return s.saveFailedBackup(session, cause)
 	}
 	s.sessionListings = nil
 	s.logger.Printf("session=%s directory=%q files=%d errors=%d", id, session.Directory, len(session.Files), len(session.Errors))
-	if len(session.Errors) > 0 {
-		return id, fmt.Errorf("session incomplete: %d file errors", len(session.Errors))
+	if session.Status == sessionFailed {
+		return id, fmt.Errorf("session failed: %d errors", len(session.Errors))
+	}
+	if session.Status == sessionCompletedWithErrors {
+		return id, &partialBackupError{fmt.Errorf("session incomplete: %d file errors", len(session.Errors))}
 	}
 	return id, nil
 }

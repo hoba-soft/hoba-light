@@ -35,7 +35,7 @@ func failedSnapshot(t *testing.T) (*cliTest, string, string, string, string) {
 	if err == nil {
 		t.Fatal("backup unexpectedly succeeded")
 	}
-	for _, want := range []string{"session incomplete", "3/3 (100%)", "1 error", "Backup finished with errors:"} {
+	for _, want := range []string{"session failed", "3/3 (100%)", "1 error", "Backup failed:"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q: %s", want, out)
 		}
@@ -122,8 +122,8 @@ func TestFailedSnapshotBrowser(t *testing.T) {
 		name, input string
 		want        []string
 	}{
-		{"details", "\r\r\rq", []string{"3 files, 1 errors", "2 files, 1 errors", "[error] bad.txt", "Size: 11 bytes", "Error:"}},
-		{"search and locate", "\r/bad\r\r\rq", []string{"Find: bad", "1/1 matches", "[error] nested/bad.txt", "Located nested/bad.txt", "Error:"}},
+		{"details", "\r\r\rq", []string{"[error] bad.txt", "Size: 11 bytes", "Error:"}},
+		{"search and locate", "\rnbad\r\r\rq", []string{"Find: bad", "[error]", "nested/bad.txt", "Located nested/bad.txt", "Error:"}},
 		{"failed restore", "\r\rrq", []string{"file was not backed up"}},
 		{"failed restore-to", "\r\rtfailed-destination\rq", []string{"file was not backed up"}},
 		{"session partial restore", "rq", []string{"restore incomplete"}},

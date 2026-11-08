@@ -25,7 +25,7 @@ func TestIntegrationHashResolutionAndArguments(t *testing.T) {
 		want string
 		args []string
 	}{
-		{"unknown command", []string{"oops"}}, {"accepts one directory", []string{"backup", "one", "two"}},
+		{"unknown command", []string{"oops"}}, {"accepts one file or directory", []string{"backup", "one", "two"}},
 		{"usage: restore", []string{"restore"}}, {"usage: restore", []string{"restore", id[:64], "dest", "--bad", "file"}},
 		{"8 to 64", []string{"restore", "abc", "dest"}}, {"invalid hexadecimal", []string{"restore", "zzzzzzzz", "dest"}},
 		{"object not found", []string{"restore", strings.Repeat("f", 64), "dest"}},
@@ -41,7 +41,7 @@ func TestIntegrationHashResolutionAndArguments(t *testing.T) {
 }
 
 func TestIntegrationDamagedObjects(t *testing.T) {
-	for _, scenario := range []string{"missing-blob", "broken-zip", "wrong-content", "session-checksum", "file-metadata", "invalid-blob-reference"} {
+	for _, scenario := range []string{"missing-blob", "broken-zip", "wrong-content", "wrong-size", "session-checksum", "file-metadata", "invalid-blob-reference"} {
 		t.Run(scenario, func(t *testing.T) {
 			c := newCLI(t)
 			writeFile(t, filepath.Join(c.source, "file"), []byte("original"))
@@ -60,16 +60,23 @@ func TestIntegrationDamagedObjects(t *testing.T) {
 			case "broken-zip":
 				writeFile(t, blob, []byte("not a ZIP"))
 				want = "not a valid zip"
-			case "wrong-content":
+			case "wrong-content", "wrong-size":
 				var buf bytes.Buffer
 				zw := zip.NewWriter(&buf)
 				w, err := zw.Create("data")
 				must(t, err)
-				_, err = w.Write([]byte("different"))
+				content := "modified" // Same size as the original: exercise the hash check.
+				if scenario == "wrong-size" {
+					content = "different"
+				}
+				_, err = w.Write([]byte(content))
 				must(t, err)
 				must(t, zw.Close())
 				writeFile(t, blob, buf.Bytes())
 				want = "blob checksum mismatch"
+				if scenario == "wrong-size" {
+					want = "blob size does not match file metadata"
+				}
 			case "session-checksum":
 				p := c.object(sid)
 				writeFile(t, p, append(readFile(t, p), '\n'))

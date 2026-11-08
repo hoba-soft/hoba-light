@@ -10,8 +10,9 @@ import (
 )
 
 type searchMatch struct {
-	ref  Reference
-	file sessionFile
+	ref       Reference
+	file      sessionFile
+	directory bool
 }
 
 // Search uses display metadata; original file objects are read only for legacy
@@ -33,7 +34,11 @@ func (s *Store) findFiles(query, session, directory string) ([]searchMatch, erro
 		if err := s.read(id, 'S', &object); err != nil {
 			return nil, err
 		}
-		refs = []Reference{{Session: id, Directory: object.Directory, Started: object.Started}}
+		refs = []Reference{{Session: id, Directory: object.Directory, Started: object.Started, Comment: object.Comment}}
+	}
+	refs, err = filterSessionDates(refs, s.sessionDate)
+	if err != nil {
+		return nil, err
 	}
 	refs = groupedReferences(refs)
 	query = strings.ToLower(query)
@@ -42,11 +47,15 @@ func (s *Store) findFiles(query, session, directory string) ([]searchMatch, erro
 	if directory != "" {
 		prefix = directory + "/"
 	}
-	foundDirectory := directory == ""
+	foundDirectory := directory == "" || (s.sessionDate != "" && len(refs) == 0)
 	for _, ref := range refs {
-		_, files, err := s.listingFiles(ref.Session)
+		object, files, err := s.listingFiles(ref.Session)
 		if err != nil {
 			return nil, fmt.Errorf("session %s: %w", ref.Session[:8], err)
+		}
+		ref.Comment = object.Comment
+		if directory == "" && strings.Contains(strings.ToLower(ref.Comment), query) {
+			matches = append(matches, searchMatch{ref: ref})
 		}
 		sort.Slice(files, func(i, j int) bool { return files[i].relative < files[j].relative })
 		for _, file := range files {
@@ -55,7 +64,7 @@ func (s *Store) findFiles(query, session, directory string) ([]searchMatch, erro
 			}
 			foundDirectory = true
 			if strings.Contains(strings.ToLower(path.Base(file.relative)), query) {
-				matches = append(matches, searchMatch{ref, file})
+				matches = append(matches, searchMatch{ref: ref, file: file})
 			}
 		}
 	}
@@ -85,7 +94,7 @@ func (s *Store) find(args []string, output io.Writer) error {
 		return err
 	}
 	if len(matches) == 0 {
-		fmt.Fprintln(output, "No matching files.")
+		fmt.Fprintln(output, "No matching files or sessions.")
 		return nil
 	}
 	var names, sizes []string
@@ -104,7 +113,10 @@ func (s *Store) find(args []string, output io.Writer) error {
 			fmt.Fprintln(output, browserText(m.ref.Directory))
 		}
 		if m.ref.Session != previousSession {
-			fmt.Fprintf(output, "  Session %s  %s\n", m.ref.Session[:8], sessionTime(m.ref))
+			fmt.Fprintf(output, "  Session %s  %s\n", m.ref.Session[:8], sessionTime(m.ref)+commentSuffix(m.ref.Comment))
+		}
+		if m.file.id == "" {
+			continue
 		}
 		fmt.Fprintln(output, "    "+hashSizeColumn(names[i], m.file.id[:8], sizes[i], width, column))
 		previousDirectory, previousSession = m.ref.Directory, m.ref.Session

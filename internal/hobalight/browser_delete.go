@@ -11,7 +11,12 @@ func (u *browserUI) requestDelete() {
 	if err != nil {
 		return
 	}
-	for _, ref := range u.refs {
+	candidates := append([]Reference(nil), u.refs...)
+	candidates = append(candidates, u.allRefs...)
+	if u.search != nil && len(u.search.matches) > 0 {
+		candidates = append(candidates, u.search.matches[u.search.cursor].ref)
+	}
+	for _, ref := range candidates {
 		if ref.Session == id {
 			u.pendingDelete = &ref
 			u.pendingDeletePath = selected
@@ -37,11 +42,13 @@ func (u *browserUI) confirmDelete() {
 			u.message = "Error: " + err.Error()
 			return
 		}
-		u.refs = groupedReferences(refs)
-
-		u.stats = u.store.referenceStats(refs)
-		u.sessionTable = nil
+		u.replaceReferences(refs)
+		if u.sources || u.source != "" {
+			u.selectSource(ref.Directory)
+		}
 		u.ref, u.detail, u.search, u.tree = nil, nil, nil, nil
+		u.merged = nil
+		u.history, u.searchHistory, u.searchParent = nil, nil, nil
 		u.current, u.cursor, u.parents = "", 0, nil
 		u.clearComparison()
 		for i, candidate := range u.refs {
@@ -58,17 +65,16 @@ func (u *browserUI) confirmDelete() {
 		u.message = "Error: " + err.Error()
 		return
 	}
-	remaining := u.refs[:0]
-	for _, candidate := range u.refs {
-		if candidate.Session != ref.Session {
-			remaining = append(remaining, candidate)
-		}
+	refs, err := u.store.sessionReferences()
+	if err != nil {
+		u.message = "Error: " + err.Error()
+		return
 	}
-	clear(u.refs[len(remaining):])
-	u.refs = remaining
-	delete(u.stats, ref.Session)
-	u.sessionTable = nil
-	u.cursor = min(u.cursor, max(0, len(u.refs)-1))
+	cursor := u.cursor
+	u.replaceReferences(refs)
+	u.cursor = min(cursor, max(0, u.count()-1))
+	u.search = nil
+	u.history, u.searchHistory, u.searchParent = nil, nil, nil
 	u.clearComparison()
 	u.message = "Deleted session " + ref.Session[:8]
 }
@@ -107,11 +113,10 @@ func (u *browserUI) confirmFileDelete() {
 	err := u.store.deleteFileConfirmed(plan, &out)
 	refs, readErr := u.store.sessionReferences()
 	if readErr == nil {
-		u.refs = groupedReferences(refs)
-
-		u.stats = u.store.referenceStats(refs)
-		u.sessionTable = nil
+		u.replaceReferences(refs)
 		u.ref, u.detail, u.search, u.tree = nil, nil, nil, nil
+		u.merged = nil
+		u.history, u.searchHistory, u.searchParent = nil, nil, nil
 		u.current, u.cursor, u.parents = "", 0, nil
 		u.clearComparison()
 	}

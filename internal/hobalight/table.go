@@ -40,7 +40,7 @@ func (t listingTable) row(name, hash string, s tableStats, width int) string {
 	if width > 0 {
 		nameWidth = max(1, width-runewidth.StringWidth(suffix)-2)
 	}
-	name = browserClip(name, nameWidth)
+	name = browserPath(name, nameWidth)
 	return name + strings.Repeat(" ", max(0, nameWidth-runewidth.StringWidth(name))) + "  " + suffix
 }
 func (t listingTable) header(session bool, width int) string {
@@ -49,4 +49,18 @@ func (t listingTable) header(session bool, width int) string {
 		name, hash = "Started", "Session"
 	}
 	return t.row(name, hash, tableStats{"Files", "Errors", "Size"}, width)
+}
+
+func browserEntryNames(entries []browserEntry) []string {
+	var names []string
+	for _, entry := range entries {
+		name := entry.name
+		if entry.directory {
+			name += "/"
+		} else if entry.file != nil {
+			name = markedFileName(name, entry.file.metadata)
+		}
+		names = append(names, name)
+	}
+	return names
 }

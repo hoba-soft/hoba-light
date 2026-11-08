@@ -161,7 +161,7 @@ func TestBrowserDeletePaths(t *testing.T) {
 		{"directory", "\r", "nested", 1},
 		{"file", "\r\r", "nested/file.txt", 1},
 		{"file details", "\r\r\r", "nested/file.txt", 1},
-		{"search result", "/file\r", "nested/file.txt", 1},
+		{"search result", "nfile\r", "nested/file.txt", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newCLI(t)

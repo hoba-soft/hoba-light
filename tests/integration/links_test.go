@@ -18,7 +18,7 @@ func TestIntegrationLinksAndNestedStore(t *testing.T) {
 	}
 	must(t, os.Symlink(".", filepath.Join(c.source, "directory-link")))
 	must(t, os.Symlink("missing", filepath.Join(c.source, "broken")))
-	c.fails("session incomplete", "backup", c.source)
+	c.failsCode(2, "session incomplete", "backup", c.source)
 	refs := c.refs()
 	if len(refs) != 1 {
 		t.Fatal("partial session not published")
@@ -107,7 +107,7 @@ func TestIntegrationDirectoryLinkAsSource(t *testing.T) {
 	if err := os.Symlink(c.source, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	c.fails("source directory must not be a symlink", "backup", link)
+	c.fails("backup source must not be a symlink", "backup", link)
 	if refs := c.refs(); len(refs) != 0 {
 		t.Fatalf("published a misleading empty snapshot: %+v", refs)
 	}

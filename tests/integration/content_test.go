@@ -20,7 +20,7 @@ func TestContentCommandAndBrowser(t *testing.T) {
 		}
 	}
 	// Current file, its details, search results, and historical version.
-	for _, nav := range []string{"\r\r", "\r\r\r", "/note\r\r\r", "\r\r\rvj"} {
+	for _, nav := range []string{"\r\r", "\r\r\r", "nnote\r\r\r", "\r\r\rvj"} {
 		out := c.interact(testBinary, nav+"cxta\x1b[Dq", nil)
 		requireOutput(t, out, "Content (text):", "Content (hex):", "note.txt")
 	}

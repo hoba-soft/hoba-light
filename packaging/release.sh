@@ -19,7 +19,7 @@ for platform in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64 
   done
 done
 (cd dist && sha256sum hobalight_* > SHA256SUMS)
-: > release-notes.txt
+cp "$(dirname "${BASH_SOURCE[0]}")/../RELEASE_NOTES.md" release-notes.txt
 if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
   gh release upload "$tag" dist/* --repo "$GITHUB_REPOSITORY" --clobber
 else

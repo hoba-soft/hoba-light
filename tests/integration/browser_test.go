@@ -12,7 +12,13 @@ import (
 	"time"
 )
 
+// Most browser scenarios start inside the first source, at its session list.
 func (c *cliTest) interact(binary, input string, extra map[string]string) string {
+	c.t.Helper()
+	return c.interactSources(binary, "\r"+input, extra)
+}
+
+func (c *cliTest) interactSources(binary, input string, extra map[string]string) string {
 	c.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -24,7 +30,7 @@ func (c *cliTest) interact(binary, input string, extra map[string]string) string
 			cmd.Env = append(cmd.Env, env)
 		}
 	}
-	cmd.Env = append(cmd.Env, "HOBALIGHT_STORAGE="+c.storage, "HOME="+filepath.Join(c.root, "home"), "USERPROFILE="+filepath.Join(c.root, "home"))
+	cmd.Env = append(cmd.Env, "TZ=UTC", "HOBALIGHT_STORAGE="+c.storage, "HOME="+filepath.Join(c.root, "home"), "USERPROFILE="+filepath.Join(c.root, "home"))
 	for k, v := range extra {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
@@ -51,7 +57,7 @@ func TestIntegrationBrowserRenamedExecutable(t *testing.T) {
 	if string(readFile(t, restored)) != "restored data" {
 		t.Fatal("wrong restored content")
 	}
-	for _, want := range []string{"Hoba Light Browser", "file.txt", "Session ", "Restored ", "nested/"} {
+	for _, want := range []string{"Sessions", "file.txt", "Session ", "Restored ", "nested/"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q: %s", want, out)
 		}
@@ -111,7 +117,7 @@ func TestBrowserRestoreToTextAndCancellation(t *testing.T) {
 	// not to navigation commands. Pick the directory within the session.
 	destination := "Q Recovery Кириллица"
 	out := c.interact(testBinary, "\x1b[Ctwrong\x15"+destination+"x\x7f\rq", nil)
-	if !strings.Contains(out, "Restored 1 files") {
+	if !strings.Contains(out, "Restored 1 file") {
 		t.Fatal(out)
 	}
 	assertTree(t, filepath.Join(c.root, destination), map[string][]byte{"nested/file.txt": []byte("data")})
@@ -131,12 +137,12 @@ func TestBrowserSearchScopesAndNavigation(t *testing.T) {
 		name, input string
 		want        []string
 	}{
-		{"all sessions", "/договор\rq", []string{"Scope: All sessions", "1/4 matches"}},
-		{"session", "\r/договор\rq", []string{"1/2 matches"}},
-		{"directory", "\r\r/договор\rq", []string{"1/1 matches", "/nested", "договор.txt"}},
-		{"empty results", "/absent\r\x1b[Dq", []string{"No matching files."}},
-		{"edit input", "/wrong\x15договорx\x7f\r\x1b[B\x1b[A\x1b[F\x1b[H\x1b[6~\x1b[5~\rq", []string{"Find: договор", "Located"}},
-		{"cancel input", "/unsubmitted\x1bq", []string{"Hoba Light Browser"}},
+		{"source sessions", "nдоговор\rq", []string{"All sessions"}},
+		{"session", "\rnдоговор\rq", []string{"договор.txt"}},
+		{"directory", "\r\rnдоговор\rq", []string{"/nested", "договор.txt"}},
+		{"empty results", "nabsent\r\x1b[Dq", []string{"No matching files or directories."}},
+		{"edit input", "nwrong\x15договорx\x7f\r\x1b[B\x1b[A\x1b[F\x1b[H\x1b[6~\x1b[5~\rq", []string{"Find: договор", "Located"}},
+		{"cancel input", "nunsubmitted\x1bq", []string{"Started"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			local := *c
@@ -144,8 +150,8 @@ func TestBrowserSearchScopesAndNavigation(t *testing.T) {
 			requireOutput(t, local.interact(testBinary, tc.input, nil), tc.want...)
 		})
 	}
-	out := c.interact(testBinary, "/note\rtsearch-restore\rq", nil)
-	requireOutput(t, out, "Restored 1 files")
+	out := c.interact(testBinary, "nnote\rtsearch-restore\rq", nil)
+	requireOutput(t, out, "Restored 1 file")
 	assertTree(t, filepath.Join(c.root, "search-restore"), map[string][]byte{"nested/deep/note.txt": []byte("nested/deep/note.txt")})
 }
 
@@ -156,7 +162,7 @@ func TestBrowserNavigationAndRefresh(t *testing.T) {
 	}
 	c.ok("backup", c.source)
 	out := c.interact(testBinary, "f\r\x1b[F\r\x1b[D\x1b[H\x1b[6~\x1b[5~\x1b[Dq", nil)
-	requireOutput(t, out, "35 files", "file-34.txt", "File object:", "Path:")
+	requireOutput(t, out, "file-34.txt", "File object:", "Path:")
 	if strings.Contains(out, "Error:") {
 		t.Fatal(out)
 	}
@@ -173,4 +179,22 @@ func TestIntegrationBrowserCompactHelp(t *testing.T) {
 			t.Fatal(out)
 		}
 	}
+}
+
+func TestBrowserFilterListsAndRestoreSelectedFile(t *testing.T) {
+	c := newCLI(t)
+	writeFile(t, filepath.Join(c.source, "alpha", "first.txt"), []byte("first"))
+	writeFile(t, filepath.Join(c.source, "beta", "second.txt"), []byte("second"))
+	c.ok("backup", "-c", "Before upgrade", c.source)
+	c.ok("backup", "-c", "After upgrade", c.source)
+	out := c.interact(testBinary, "/AFTER\r\rq", nil)
+	requireOutput(t, out, "After upgrade", "Session ")
+	// Select beta after filtering the session's entries, then restore its file
+	// after a second filter. The selected item must map to the unfiltered list.
+	out = c.interact(testBinary, "\r/beta\r\r/SECOND\rtfiltered-restore\rq", nil)
+	requireOutput(t, out, "Restored 1 file")
+	assertTree(t, filepath.Join(c.root, "filtered-restore"), map[string][]byte{"beta/second.txt": []byte("second")})
+	// Esc cancels editing; a second Left clears a committed filter.
+	out = c.interact(testBinary, "/missing\r\x1b[D/unfinished\x1bq", nil)
+	requireOutput(t, out, "Before upgrade", "After upgrade")
 }

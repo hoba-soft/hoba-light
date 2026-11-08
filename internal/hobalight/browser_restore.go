@@ -61,9 +61,12 @@ func (u *browserUI) selectedRestore() (id, selected string, file bool, err error
 			return "", "", false, errors.New("no files to restore")
 		}
 		m := u.search.matches[u.search.cursor]
-		return m.ref.Session, m.file.relative, true, nil
+		return m.ref.Session, m.file.relative, m.file.id != "", nil
 	}
 	if u.ref == nil {
+		if u.sources {
+			return "", "", false, errors.New("select a session to restore")
+		}
 		if len(u.refs) == 0 {
 			return "", "", false, errors.New("no sessions to restore")
 		}
@@ -97,12 +100,16 @@ func (u *browserUI) restoreSelectionTo(destination string, open bool) {
 	previous := u.store.progress
 	u.store.progress = func(p progressUpdate) { u.restoreProgress(p.done, p.total, p.current) }
 	defer func() { u.store.progress = previous }()
-	result, err := u.store.restoreResolved(id, selected, destination, io.Discard)
+	fileID := ""
+	if isFile {
+		fileID = u.selectedContentID()
+	}
+	result, err := u.store.restoreResolvedSelection(id, selected, destination, fileID, io.Discard)
 	if err != nil {
 		u.message = "Error: " + err.Error()
 		return
 	}
-	u.message = fmt.Sprintf("Restored %d files to %s", result.count, result.destination)
+	u.message = fmt.Sprintf("Restored %s to %s", displayCount(result.count), result.destination)
 	if open {
 		if err := u.open(result.target); err != nil {
 			u.message = "Error: open file: " + err.Error()

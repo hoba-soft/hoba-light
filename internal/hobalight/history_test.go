@@ -143,7 +143,7 @@ func TestBrowserHistorySelectionAndPaging(t *testing.T) {
 	if h.cursor != 24 {
 		t.Fatal(h.cursor)
 	}
-	if view := u.view(80, 24); !strings.Contains(view, "25/25 versions") {
+	if view := u.view(80, 24); !strings.Contains(view, "aaaaaaaa") {
 		t.Fatal(view)
 	}
 	u.key("right")
@@ -184,7 +184,7 @@ func TestHistoryUsesFirstSurvivingSession(t *testing.T) {
 	}
 	u := browserUI{history: &browserHistory{path: "/source/file", versions: versions}}
 	view := u.view(120, 30)
-	if !strings.Contains(view, "First backed up") || !strings.Contains(view, "2026-01-01T00:00:00Z") || strings.Contains(view, "2026-03-01T00:00:00Z") {
+	if !strings.Contains(view, "First backed up") || !strings.Contains(view, displayTimestamp("2026-01-01T00:00:00Z")) || strings.Contains(view, displayTimestamp("2026-03-01T00:00:00Z")) {
 		t.Fatal(view)
 	}
 	must(t, os.Remove(s.object(first)))

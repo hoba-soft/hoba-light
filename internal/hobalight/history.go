@@ -81,9 +81,25 @@ func (s *Store) historyVersions(fullPath string) ([]fileVersion, error) {
 		if !validID(id, 'S') {
 			return nil
 		}
+		if s.sessionDate != "" {
+			var header Session
+			if err := s.read(id, 'S', &header); err != nil {
+				return err
+			}
+			if match, err := matchesSessionDate(header.Started, s.sessionDate); err != nil {
+				return err
+			} else if !match {
+				return nil
+			}
+		}
 		session, files, err := s.listingFiles(id)
 		if err != nil {
 			return err
+		}
+		if match, err := matchesSessionDate(session.Started, s.sessionDate); err != nil {
+			return err
+		} else if !match {
+			return nil
 		}
 		started, err := time.Parse(time.RFC3339Nano, session.Started)
 		if err != nil {
@@ -126,7 +142,7 @@ func (s *Store) historyVersions(fullPath string) ([]fileVersion, error) {
 				version = &fileVersion{id: fid, file: f}
 				byID[fid] = version
 			}
-			version.sessions = append(version.sessions, searchMatch{ref: Reference{Session: id, Directory: session.Directory, Started: session.Started}, file: sessionFile{id: fid, relative: rel, metadata: f}})
+			version.sessions = append(version.sessions, searchMatch{ref: Reference{Session: id, Directory: session.Directory, Started: session.Started, Comment: session.Comment}, file: sessionFile{id: fid, relative: rel, metadata: f}})
 			if version.earliest.IsZero() || started.Before(version.earliest) {
 				version.earliest = started
 			}
@@ -173,9 +189,9 @@ func (s *Store) history(args []string, output io.Writer) error {
 	}
 	for _, v := range versions {
 		label := markedFileName(v.id[:8], v.file)
-		fmt.Fprintf(output, "\n%s  First backed up: %s  %s  %s\n", label, v.earliest.UTC().Format(time.RFC3339Nano), historySessionCount(len(v.sessions)), displaySize(v.file.Size))
+		fmt.Fprintf(output, "\n%s  First backed up: %s  %s  %s\n", label, v.earliest.In(time.Local).Format(time.RFC3339Nano), historySessionCount(len(v.sessions)), displaySize(v.file.Size))
 		for _, m := range v.sessions {
-			fmt.Fprintf(output, "  Session %s  %s  %s\n", m.ref.Session[:8], m.ref.Started, browserText(m.ref.Directory))
+			fmt.Fprintf(output, "  Session %s  %s  %s\n", m.ref.Session[:8], displayTimestamp(m.ref.Started), browserText(m.ref.Directory))
 		}
 	}
 	return nil

@@ -38,7 +38,11 @@ func (s *Store) previousBackup(directory string) (string, map[string]File, error
 		if e != nil {
 			return e
 		}
-		if session.Directory != directory {
+		source := session.Source
+		if source == "" {
+			source = session.Directory
+		}
+		if source != directory {
 			return nil
 		}
 		started, e := time.Parse(time.RFC3339Nano, session.Started)

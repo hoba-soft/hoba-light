@@ -20,7 +20,7 @@ func TestBackupDisplayCompletion(t *testing.T) {
 			var err error
 			if failed {
 				n = 1
-				err = errors.New("incomplete")
+				err = &partialBackupError{errors.New("incomplete")}
 			}
 			d.update(progressUpdate{operation: "Backup", done: 2, total: 2, current: "/source/last", errors: n, addedBytes: 2048})
 			if strings.Contains(out.String(), "100%") {
@@ -67,6 +67,29 @@ func TestBackupProgressAddedData(t *testing.T) {
 		}
 		if last != summary.addedBytes {
 			t.Fatalf("progress %d summary %d", last, summary.addedBytes)
+		}
+	}
+}
+
+func TestBackupDisplayRelativePaths(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "source with spaces\nданные")
+	for _, terminal := range []bool{false, true} {
+		for _, name := range []string{".", "file.txt", "nested/photo данные.jpg"} {
+			var out bytes.Buffer
+			d := newBackupDisplay(&out, root)
+			d.terminal, d.fd = terminal, -1
+			out.Reset()
+			d.progress = progressUpdate{operation: "Backup", done: 1, total: 3, current: filepath.Join(root, filepath.FromSlash(name))}
+			d.draw("Backing up: "+d.source, false)
+			text := out.String()
+			if !strings.HasSuffix(text, "  "+name+map[bool]string{false: "\n", true: ""}[terminal]) {
+				t.Fatalf("expected relative path %q: %q", name, text)
+			}
+			for _, row := range strings.Split(text, "\n") {
+				if strings.Contains(row, "Progress:") && strings.Contains(row, "source with spaces") {
+					t.Fatalf("progress repeats source directory: %q", row)
+				}
+			}
 		}
 	}
 }

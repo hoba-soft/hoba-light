@@ -106,7 +106,7 @@ func TestFailedFileSessionLifecycle(t *testing.T) {
 	}
 	u.enter()
 	u.enter() // nested directory
-	if view := u.view(100, 24); !strings.Contains(view, "1 file, 1 errors") || !strings.Contains(view, "[error] bad.txt") {
+	if view := u.view(100, 24); !strings.Contains(view, "[error] bad.txt") {
 		t.Fatal(view)
 	}
 	u.enter() // failed file details

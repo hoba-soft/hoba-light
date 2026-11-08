@@ -144,7 +144,7 @@ func (c *cliTest) commandInput(env map[string]string, input string, args ...stri
 			cmd.Env = append(cmd.Env, entry)
 		}
 	}
-	cmd.Env = append(cmd.Env, "HOBALIGHT_STORAGE="+c.storage, "HOME="+filepath.Join(c.root, "home"), "USERPROFILE="+filepath.Join(c.root, "home"))
+	cmd.Env = append(cmd.Env, "TZ=UTC", "HOBALIGHT_STORAGE="+c.storage, "HOME="+filepath.Join(c.root, "home"), "USERPROFILE="+filepath.Join(c.root, "home"))
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
@@ -166,6 +166,11 @@ func (c *cliTest) ok(args ...string) string {
 
 func (c *cliTest) fails(want string, args ...string) {
 	c.t.Helper()
+	c.failsCode(1, want, args...)
+}
+
+func (c *cliTest) failsCode(code int, want string, args ...string) {
+	c.t.Helper()
 	out, err := c.command(nil, args...)
 	var exit *exec.ExitError
 	if err == nil {
@@ -174,8 +179,8 @@ func (c *cliTest) fails(want string, args ...string) {
 	if !strings.Contains(out, want) {
 		c.t.Fatalf("%v: expected %q; got %v: %s", args, want, err, out)
 	}
-	if !errors.As(err, &exit) || exit.ExitCode() != 1 {
-		c.t.Fatalf("expected exit 1, got %v", err)
+	if !errors.As(err, &exit) || exit.ExitCode() != code {
+		c.t.Fatalf("expected exit %d, got %v", code, err)
 	}
 }
 
@@ -255,4 +260,25 @@ func assertTree(t *testing.T, root string, want map[string][]byte) {
 			t.Fatalf("content mismatch: %s", p)
 		}
 	}
+}
+
+// Unix CLI fixtures explicitly use TZ=UTC. Windows ignores TZ and uses the
+// system zone, so assertions must follow the native runner's actual zone.
+func cliTimeZone() *time.Location {
+	if runtime.GOOS == "windows" {
+		return time.Local
+	}
+	return time.UTC
+}
+func cliTimestamp(t *testing.T, value string) string {
+	t.Helper()
+	at, err := time.Parse(time.RFC3339Nano, value)
+	must(t, err)
+	return at.In(cliTimeZone()).Format(time.RFC3339Nano)
+}
+func cliLocalSessionStart(t *testing.T, value string) string {
+	t.Helper()
+	at, err := time.ParseInLocation("2006-01-02T15:04:05", value, cliTimeZone())
+	must(t, err)
+	return at.UTC().Format(time.RFC3339Nano)
 }

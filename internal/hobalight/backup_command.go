@@ -12,9 +12,27 @@ import (
 func (s *Store) backupCommand(args, directories []string, output, status io.Writer) error {
 	dirs := directories
 	force := false
+	comment := ""
 	var selected []string
 	options := true
-	for _, arg := range args {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if options && (arg == "--comment" || arg == "-c") {
+			if i+1 >= len(args) {
+				return fmt.Errorf("%s requires text", arg)
+			}
+			i++
+			comment = args[i]
+			continue
+		}
+		if options && strings.HasPrefix(arg, "-c=") {
+			comment = strings.TrimPrefix(arg, "-c=")
+			continue
+		}
+		if options && strings.HasPrefix(arg, "--comment=") {
+			comment = strings.TrimPrefix(arg, "--comment=")
+			continue
+		}
 		if options && arg == "--" {
 			options = false
 			continue
@@ -29,13 +47,13 @@ func (s *Store) backupCommand(args, directories []string, output, status io.Writ
 		}
 	}
 	if len(selected) > 1 {
-		return errors.New("backup accepts one directory")
+		return errors.New("backup accepts one file or directory")
 	}
 	if len(selected) == 1 {
 		dirs = selected
 	}
 	if len(dirs) == 0 {
-		return errors.New("no backup directories configured: specify a directory with backup <directory> or set directories in the config")
+		return errors.New("no backup sources configured: specify backup <path> or set directories in the config")
 	}
 	lf, err := s.backend.NewLog()
 	if err != nil {
@@ -56,7 +74,7 @@ func (s *Store) backupCommand(args, directories []string, output, status io.Writ
 		previousProgress := s.progress
 		s.progress = display.update
 		var summary backupSummary
-		id, err := s.backupWithSummary(dir, force, &summary)
+		id, err := s.backupWithComment(dir, force, &summary, comment)
 		s.progress = previousProgress
 		display.finish(id, err)
 		if id != "" {

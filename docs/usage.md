@@ -12,12 +12,26 @@ hl browse
 The first command backs up a directory. The second opens saved backups.
 Press `?` in the browser for controls.
 
+Use `hl backup <file>` or `hl <file>` to back up a single file.
+Restoring its session places the file in the destination under its original name.
+
+Add a session comment with `hl backup --comment "Before upgrade" <path>`.
+The short form is `hl -c "Before upgrade" <path>`.
+Comments appear in `list` and the browser; `find <text>` also matches comments.
+In the browser, `/` filters the current list, including comments; `n` searches
+file and directory names across sessions. Both ignore case.
+Leave a filter empty or press Esc/Left to clear it. Navigation clears the filter.
+
 Each backup creates a session. Unchanged data is reused.
 Use `hl ./list` for a directory named `list`; command names take priority.
 
 Backups are not encrypted. Empty directories and file permissions are not saved.
-A backup with errors may be incomplete; the command reports failures and exits
-with a nonzero status.
+Sessions store `completed`, `completed_with_errors`, or `failed`.
+Exit codes: `0` for success, `2` when all source errors are recorded in the saved
+session, `1` for storage failures or an unsaved report. Unreadable directories
+are reported as a whole; their contents are unknown. For multiple sources,
+failure takes priority. If storage is unavailable, even a failed session may
+not be saved.
 
 ## Configuration
 
@@ -50,7 +64,7 @@ Settings can also be set with `HOBALIGHT_CONFIG`, `HOBALIGHT_STORAGE`,
 ## Backup
 
 ```sh
-hl backup                # all configured directories
+hl backup                # all configured files and directories
 hl backup --force /path/to/documents
 hl --exclude '*.log' /path/to/documents
 ```
@@ -101,3 +115,34 @@ Use `--dry-run` to preview changes.
 After a crash, a `.backup-*` file or `.gc.lock` directory may block operations.
 Errors show its path. Remove it only after checking that the related process
 has stopped.
+
+The browser starts with a shared tree of backup roots. Open a root to see its sessions;
+open a session to see its files. Left returns to the previous level.
+
+Filter sessions by their creation day in local time with `--date YYYY-MM-DD` on
+`list`, `find`, `history`, or `browse`. For example, `hl list --date 2026-11-07`.
+In the browser, press `D` to choose a day and preview its roots and session counts.
+Tab switches between the calendar and scrolling the roots. Enter applies the day;
+`c` clears the filter. File modification dates do not affect this filter.
+
+Press `m` to switch between Sessions and Merged files. The merged tree contains
+all paths from the selected sessions, including older files. Open a file to see
+its versions, then open a version to view metadata. Press `c` for content,
+`r` to restore, or `o` to restore and open it. `s` lists a version’s sessions.
+
+Dates are displayed in the computer’s local time zone. Stored timestamps and
+logs stay in UTC. `--date` and the calendar select a local day, including
+daylight-saving changes.
+
+Optional session retention is applied only by `gc` (also shown by `gc --dry-run`):
+
+```yaml
+retention:
+  days: 30
+  sessions: 10
+```
+
+For each source, keep sessions within the last 30 days **or** its 10 newest
+sessions. All statuses count. Days mean elapsed 24-hour periods. Omit a rule
+or use `0` to disable it; both disabled keeps all sessions. Removed sessions
+and unused objects go to trash, subject to `trash_retention_days`.

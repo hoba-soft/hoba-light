@@ -2,19 +2,21 @@ package hobalight
 
 const commandHelp = `Usage: hobalight [--config file] [--exclude pattern ...] [command]
 
-No command shows help. A directory path alone runs backup.
-Use ./<name> for directories whose names match a command.
+No command shows help. A file or directory path alone runs backup.
+Use ./<name> for paths whose names match a command.
 Commands:
   info                                Show settings, paths and storage statistics
   view [--mode auto|text|hex] <file-hash> | <session> <file-path>
                                       View file contents with scrolling and search
   browse                              Open the interactive backup browser
-  backup [--force] [directory]     Back up one or configured directories;
+  backup [--force] [path]              Back up one file/directory or configured paths;
                                       --force rereads and rehashes every file
-  list [session] [relative/path]       List sessions or directory contents
+                                      --comment/-c text labels each new session
+  list [--date YYYY-MM-DD] [session] [relative/path]       List sessions or directory contents
   history <absolute-path> | history <session> <relative-file-path>
                                       Show versions of a file across sessions
-  find <name>                         Find files in all sessions
+                                      list/find/history/browse accept --date YYYY-MM-DD (local time)
+  find <name>                         Find files and session comments
   find <session> [relative/directory] <name>
   delete [--force] <session-or-file-hash> [relative/path]
                                       Confirm deletion; gc collects unused data

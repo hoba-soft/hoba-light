@@ -21,11 +21,38 @@ func TestBrowserArrowKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestBrowserNavigationUsesFullBreadcrumbs(t *testing.T) {
+	flatten := func(view string) string {
+		var text strings.Builder
+		for _, line := range strings.Split(view, "\n") {
+			text.WriteString(line)
+		}
+		return text.String()
+	}
+	ref := Reference{Session: strings.Repeat("a", 64) + "S", Directory: "/a/very/long/root/path/Документы", Comment: strings.Repeat("A session comment ", 20)}
+	file := sessionFile{relative: "note.txt", id: strings.Repeat("b", 64) + "F"}
+	for _, width := range []int{60, 100} {
+		u := browserUI{sources: true, refs: []Reference{ref}}
+		if view := u.view(width, 24); strings.Contains(view, "Sources") || strings.Contains(view, "›") {
+			t.Fatal(view)
+		}
+		u.sources, u.source = false, ref.Directory
+		if view := flatten(u.view(width, 24)); !strings.Contains(view, ref.Directory) {
+			t.Fatal("root breadcrumb truncated", view)
+		}
+		u.ref, u.files = &ref, []sessionFile{file}
+		if view := flatten(u.view(width, 24)); !strings.Contains(view, ref.Comment) || !strings.Contains(view, ref.Directory) {
+			t.Fatal("session breadcrumb truncated", view)
+		}
+	}
+}
+
 func TestBrowserGroupedSelection(t *testing.T) {
 	refs := []Reference{{Session: strings.Repeat("a", 64) + "S", Directory: "newest"}, {Session: strings.Repeat("b", 64) + "S", Directory: "oldest"}}
 	u := browserUI{refs: refs}
 	view := u.view(100, 24)
-	if !strings.Contains(strings.Join(strings.Fields(view), " "), "> aaaaaaaa") || !strings.Contains(view, "  bbbbbbbb") {
+	if !strings.Contains(strings.Join(strings.Fields(view), " "), "│> aaaaaaaa") || !strings.Contains(view, "  bbbbbbbb") {
 		t.Fatal(view)
 	}
 	u.key("down")
@@ -45,7 +72,7 @@ func TestBrowserGroupedSelection(t *testing.T) {
 	}
 	u.key("end")
 	view = u.view(100, 15)
-	if !strings.Contains(view, fmt.Sprintf("%d/%d", len(u.refs), len(u.refs))) {
+	if u.cursor != len(u.refs)-1 {
 		t.Fatal("long list did not scroll")
 	}
 }
@@ -81,7 +108,7 @@ func TestBrowserFileMetadata(t *testing.T) {
 	f := sessionFile{relative: "nested/file.txt", id: strings.Repeat("a", 64) + "F", metadata: File{Identity: Identity{Path: "/home/person/documents/nested/file.txt", Size: 12345, Created: &created, Modified: "2026-10-18T12:00:00Z"}, Blob: strings.Repeat("b", 64) + "B"}}
 	u := browserUI{ref: &Reference{Session: strings.Repeat("c", 64) + "S", Directory: "/home/person/documents"}, detail: &f, current: "nested"}
 	view := u.view(120, 30)
-	for _, want := range []string{"Path: /home/person/documents/nested/file.txt", "Size: 12345 bytes", "Created: " + created, "Modified: 2026-10-18T12:00:00Z", "File object: aaaaaaaa", "Blob object: bbbbbbbb"} {
+	for _, want := range []string{"Path: /home/person/documents/nested/file.txt", "Size: 12345 bytes", "Created: " + displayTimestamp(created), "Modified: " + displayTimestamp("2026-10-18T12:00:00Z"), "File object: aaaaaaaa", "Blob object: bbbbbbbb"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("missing %q: %s", want, view)
 		}
@@ -142,7 +169,7 @@ func TestBrowserContextualHelp(t *testing.T) {
 		}
 	}
 	u = browserUI{}
-	if help = u.help(); help != "f refresh · / search · q quit" {
+	if help = u.help(); help != "f refresh · / filter · n search · D date · m mode · q quit" {
 		t.Fatal(help)
 	}
 }
@@ -179,8 +206,8 @@ func TestBrowserComparisonToggleAndOpen(t *testing.T) {
 	if u.streamDiff == nil || !strings.Contains(u.view(100, 24), "~ ") {
 		t.Fatal("second session did not open comparison")
 	}
-	if !strings.Contains(u.view(100, 24), "┌") {
-		t.Fatal("comparison has no content panel")
+	if !strings.Contains(u.view(100, 24), "Comparison") {
+		t.Fatal("comparison has no view title")
 	}
 	u.key("left")
 	if u.streamDiff != nil || u.cursor != 0 {
@@ -245,9 +272,9 @@ func TestBrowserVimDiffScrolling(t *testing.T) {
 func TestBrowserPanelDisplayWidth(t *testing.T) {
 	for _, name := range []string{"Dowo\u0301d Rejestracyjny.pdf", "Zas\u0301wiadczenie.pdf", "中文文件.pdf", "🙂 backup"} {
 		for _, width := range []int{20, 80} {
-			panel := browserPanel([]string{name, strings.Repeat(name, 5)}, width)
+			panel := browserBox([]browserPanelLine{{text: " " + name}, {text: " " + strings.Repeat(name, 5)}}, width-3)
 			for _, line := range panel {
-				if got := runewidth.StringWidth(line); got != width-1 {
+				if got := runewidth.StringWidth(line); got != width {
 					t.Fatalf("width %d: %d columns in %q", width, got, line)
 				}
 			}
@@ -255,14 +282,11 @@ func TestBrowserPanelDisplayWidth(t *testing.T) {
 	}
 }
 
-func TestBrowserHeaderOutsidePanel(t *testing.T) {
-	u := browserUI{}
-	view := u.view(100, 24)
-	if strings.Index(view, "Sessions") > strings.Index(view, "┌") {
-		t.Fatal(view)
-	}
-	if strings.Contains(view, "│ Hoba Light Browser") {
-		t.Fatal(view)
+func TestBrowserTitleAndEmptyRootBreadcrumb(t *testing.T) {
+	u := browserUI{sources: true}
+	lines := strings.Split(u.view(100, 24), "\n")
+	if !strings.HasPrefix(lines[0], "hoba-light browser") || lines[1] != "" || lines[2] != "/" || !strings.Contains(lines[4], "Root") {
+		t.Fatal(lines)
 	}
 }
 
@@ -292,7 +316,7 @@ func TestBrowserGroupedScrollContext(t *testing.T) {
 	for i := range u.refs {
 		u.cursor = i
 		view := u.view(100, 17)
-		if !strings.Contains(strings.Join(strings.Fields(view), " "), "> "+strings.Join(strings.Fields(sessionLabel(u.refs[i])), " ")) || !strings.Contains(view, u.refs[i].Directory) {
+		if !strings.Contains(strings.Join(strings.Fields(view), " "), "│>"+strings.Join(strings.Fields(sessionLabel(u.refs[i])), " ")) || !strings.Contains(view, u.refs[i].Directory) {
 			t.Fatalf("selection %d missing context: %s", i, view)
 		}
 	}
@@ -308,7 +332,7 @@ func TestBrowserSessionSelectionInShortTerminal(t *testing.T) {
 		for cursor, ref := range refs {
 			u := browserUI{refs: refs, cursor: cursor}
 			view := u.view(100, height)
-			if !strings.Contains(strings.Join(strings.Fields(view), " "), "> "+ref.Session[:8]) {
+			if !strings.Contains(strings.Join(strings.Fields(view), " "), "│> "+ref.Session[:8]) {
 				t.Fatalf("height %d, cursor %d lost selection: %s", height, cursor, view)
 			}
 		}
@@ -324,7 +348,7 @@ func TestBrowserCompactViewsAndHelp(t *testing.T) {
 			t.Fatal(view)
 		}
 	}
-	if strings.Count(view, "/source") != 1 || !strings.Contains(view, "? help") {
+	if strings.Count(view, "/source") != 2 || !strings.Contains(view, "? help") {
 		t.Fatal(view)
 	}
 	u.key("?")
@@ -338,11 +362,11 @@ func TestBrowserCompactViewsAndHelp(t *testing.T) {
 	u.detail = nil
 	u.search = &browserSearch{query: "file", matches: []searchMatch{{ref: *u.ref, file: f}, {ref: *u.ref, file: f}}}
 	view = u.view(100, 24)
-	if strings.Count(view, "bbbbbbbb") != 1 || strings.Count(view, "/source") != 1 {
+	if strings.Count(view, "bbbbbbbb") != 2 || strings.Count(view, "/source") != 2 {
 		t.Fatal(view)
 	}
-	if strings.Contains(view, "nested/file.txt") {
-		t.Fatal("search repeated scope")
+	if !strings.Contains(view, "nested/file.txt") {
+		t.Fatal("global search lost relative path")
 	}
 	u.ref = nil
 	view = u.view(100, 24)
@@ -352,7 +376,7 @@ func TestBrowserCompactViewsAndHelp(t *testing.T) {
 }
 func TestBrowserPathKeepsDestination(t *testing.T) {
 	got := browserPath("/very/long/parent/directory/Документы", 20)
-	if !strings.HasPrefix(got, "…") || !strings.HasSuffix(got, "/Документы") {
+	if !strings.HasPrefix(got, "/very/") || !strings.HasSuffix(got, "/Документы") {
 		t.Fatal(got)
 	}
 }
@@ -369,12 +393,12 @@ func TestComparisonBaseRemainsVisibleAcrossNavigation(t *testing.T) {
 	u := browserUI{browser: browser{store: s}, refs: refs}
 	u.enter()
 	u.key("d")
-	if view := u.view(100, 24); !strings.Contains(view, "[compare base] file.txt") || !strings.Contains(view, "Compare base:") {
+	if view := u.view(100, 24); !strings.Contains(view, "[compare base] file.txt") {
 		t.Fatal(view)
 	}
 	base := *u.compareBase
 	u.key("left")
-	if view := u.view(100, 24); !strings.Contains(view, "Compare base: "+base.id[:8]) || !strings.Contains(view, "file.txt") {
+	if view := u.view(100, 24); u.compareBase == nil || u.compareBase.id != base.id {
 		t.Fatal(view)
 	}
 	u.enter()
@@ -412,5 +436,177 @@ func TestRefreshClearsComparisonAndTableCache(t *testing.T) {
 	u.view(100, 24)
 	if u.directoryTables[u.current] != original {
 		t.Fatal("render changed cached layout")
+	}
+}
+
+func TestBrowserCompactTableLayout(t *testing.T) {
+	refs := []Reference{{Session: strings.Repeat("a", 64) + "S", Directory: "/root", Comment: "First backup"}, {Session: strings.Repeat("b", 64) + "S", Directory: "/root", Comment: strings.Repeat("Long comment ", 20)}}
+	for _, width := range []int{60, 100, 200} {
+		u := browserUI{source: "/root", refs: refs}
+		view := u.view(width, 24)
+		if strings.Count(view, "┌") != 1 || strings.Count(view, "└") != 1 {
+			t.Fatal("expected one frame", view)
+		}
+		records, rules := 0, 0
+		for _, line := range strings.Split(view, "\n") {
+			if strings.Contains(line, "aaaaaaaa") || strings.Contains(line, "bbbbbbbb") {
+				records++
+			}
+			if strings.HasPrefix(line, "├") {
+				rules++
+			}
+			if runewidth.StringWidth(line) > width {
+				t.Fatal("row too wide", line)
+			}
+		}
+		if records != 2 || rules != 1 {
+			t.Fatal(view)
+		}
+		if width >= 100 {
+			found := false
+			for _, line := range strings.Split(view, "\n") {
+				if strings.Contains(line, "aaaaaaaa") && strings.Contains(line, "First backup") {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("comment left record row", view)
+			}
+		}
+	}
+}
+
+func TestBrowserSearchUsesOneRowPerMatch(t *testing.T) {
+	ref := Reference{Session: strings.Repeat("a", 64) + "S", Directory: "/source", Comment: "A comment"}
+	u := browserUI{search: &browserSearch{query: "file", matches: []searchMatch{
+		{ref: ref, file: sessionFile{id: strings.Repeat("b", 64) + "F", relative: "file.txt"}},
+		{ref: ref, file: sessionFile{relative: "file-folder"}, directory: true},
+	}}}
+	rows := u.searchList(100, 15)
+	if len(rows) != 3 {
+		t.Fatalf("want heading and two matches: %v", rows)
+	}
+	if !strings.Contains(rows[1], "file.txt") || !strings.Contains(rows[1], "aaaaaaaa") || !strings.Contains(rows[2], "file-folder/") {
+		t.Fatal(rows)
+	}
+}
+
+func TestBrowserListsFitTerminalWithoutScrolling(t *testing.T) {
+	for _, width := range []int{60, 100, 160} {
+		for _, height := range []int{12, 24, 40} {
+			var refs []Reference
+			var files []sessionFile
+			for i := 0; i < 80; i++ {
+				refs = append(refs, Reference{Session: fmt.Sprintf("%064xS", i+1), Directory: "/source", Comment: "A session comment"})
+				files = append(files, sessionFile{id: fmt.Sprintf("%064xF", i+1), relative: fmt.Sprintf("file-%03d.txt", i)})
+			}
+			u := browserUI{refs: refs, source: "/source", cursor: 79}
+			check := func() {
+				view := u.view(width, height)
+				if rows := strings.Count(view, "\n"); rows >= height {
+					t.Fatalf("%dx%d needs %d rows and scrolls terminal: %s", width, height, rows, view)
+				}
+			}
+			check()
+			u.ref = &refs[0]
+			u.files = files
+			u.prepareTree()
+			u.entries = u.tree[""]
+			check()
+		}
+	}
+}
+
+func TestBrowserBreadcrumbAndStatusAreSeparate(t *testing.T) {
+	ref := Reference{Session: strings.Repeat("a", 64) + "S", Directory: "/root", Status: "completed", Comment: "A comment"}
+	files := []sessionFile{{relative: "first.txt", id: strings.Repeat("b", 64) + "F"}, {relative: "second.txt", id: strings.Repeat("c", 64) + "F"}}
+	u := browserUI{ref: &ref, files: files, cursor: 1}
+	u.prepareTree()
+	u.entries = u.tree[""]
+	view := u.view(120, 24)
+	lines := strings.Split(view, "\n")
+	if !strings.Contains(lines[2], "/root › aaaaaaaa") || !strings.Contains(lines[2], "A comment") {
+		t.Fatal(view)
+	}
+	if strings.Contains(lines[2], "completed") {
+		t.Fatal("status leaked into breadcrumb", view)
+	}
+	if strings.Contains(view, "2/2 entries") || strings.Contains(view, "completed") {
+		t.Fatal("status bar remains", view)
+	}
+}
+
+func TestBrowserEveryListKeepsColumnHeading(t *testing.T) {
+	ref := Reference{Session: strings.Repeat("a", 64) + "S", Directory: "/source"}
+	file := sessionFile{relative: "file.txt", id: strings.Repeat("b", 64) + "F"}
+	root := &mergedNode{children: map[string]*mergedNode{"file.txt": {name: "file.txt", file: true}}}
+	for _, tc := range []struct {
+		name, heading string
+		u             browserUI
+	}{
+		{"roots", "Root", browserUI{sources: true, refs: []Reference{ref}}},
+		{"sessions", "Started", browserUI{source: "/source", refs: []Reference{ref}}},
+		{"files", "Name", browserUI{ref: &ref, files: []sessionFile{file}}},
+		{"merged", "Name", browserUI{merged: &browserMerged{current: root}}},
+		{"search", "Path", browserUI{search: &browserSearch{matches: []searchMatch{{ref: ref, file: file}}}}},
+		{"versions", "First backed up", browserUI{history: &browserHistory{versions: []fileVersion{{id: file.id, sessions: []searchMatch{{ref: ref, file: file}}}}}}},
+		{"history sessions", "Started", browserUI{history: &browserHistory{sessions: true, versions: []fileVersion{{id: file.id, sessions: []searchMatch{{ref: ref, file: file}}}}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u := tc.u
+			if u.ref != nil {
+				u.prepareTree()
+				u.entries = u.tree[""]
+			}
+			for _, filtered := range []bool{false, true} {
+				if filtered {
+					applyBrowserFilter(&u, "no matching row")
+				}
+				view := u.view(100, 24)
+				rows := strings.Split(view, "\n")
+				found := false
+				for _, row := range rows {
+					if strings.HasPrefix(row, "│ ") && strings.Contains(row, tc.heading) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("heading missing: %s", view)
+				}
+				if filtered && !strings.Contains(view, "No matching rows.") {
+					t.Fatal(view)
+				}
+			}
+		})
+	}
+}
+
+func TestBrowserRootCountsAlignWithHeading(t *testing.T) {
+	u := browserUI{refs: []Reference{{Directory: "/one"}, {Directory: "/two"}, {Directory: "/two"}}}
+	rows := u.sourceList(100, 10)
+	for i, want := range []string{"1", "2"} {
+		assertBrowserColumn(t, rows[0], rows[i+2], "Sessions", want)
+	}
+
+}
+
+func TestBrowserMiddleTruncationKeepsWholeGraphemes(t *testing.T) {
+	for _, name := range []string{"/Users/demo/very/long/directory/notes.txt", "C:/Users/demo/очень/длинный/путь/отчёт.pdf", "áááá/👨‍👩‍👧‍👦/中文中文中文/last.txt"} {
+		for width := 0; width < 50; width++ {
+			got := browserPath(name, width)
+			if runewidth.StringWidth(got) > width {
+				t.Fatalf("%d columns exceeded by %q", width, got)
+			}
+			if width >= 12 && runewidth.StringWidth(name) > width {
+				split := strings.Split(got, "…")
+				if len(split) != 2 || !strings.HasPrefix(name, split[0]) || !strings.HasSuffix(name, split[1]) {
+					t.Fatalf("middle truncation lost ends: %q", got)
+				}
+			}
+		}
+	}
+	if got := browserPath("short.txt", 20); got != "short.txt" {
+		t.Fatal(got)
 	}
 }

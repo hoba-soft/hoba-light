@@ -23,7 +23,7 @@ func TestIntegrationListAndDiff(t *testing.T) {
 		t.Fatal(out)
 	}
 	out := c.ok("list", first[:8])
-	if !strings.Contains(out, "nested/") || strings.Contains(out, "move.txt") || !strings.Contains(out, "top.txt") || strings.Contains(out, "directory  ") || strings.Contains(out, " F ") || strings.Contains(out, " B ") {
+	if !strings.Contains(out, "nested/") || strings.Contains(out, "move.txt") || !strings.Contains(out, "top.txt") || strings.Contains(out, "directory  ") || regexp.MustCompile(`[0-9a-f]{8} [FB] `).MatchString(out) {
 		t.Fatal(out)
 	}
 	out = c.ok("list", first[:8], "nested")
@@ -91,8 +91,8 @@ func TestIntegrationGroupedSessions(t *testing.T) {
 	if help := c.ok("--help"); strings.Contains(help, "Alias for list") {
 		t.Fatal(help)
 	}
-	ui := c.interact(testBinary, "\x1b[B\r\x1b[D\x1b[B\rq", nil)
-	if !strings.Contains(ui, "Session "+oldest) || !strings.Contains(ui, "Session "+betaID) {
+	ui := c.interactSources(testBinary, "\r\x1b[B\r\x1b[D\x1b[D\x1b[B\r\rq", nil)
+	if !strings.Contains(ui, oldest) || !strings.Contains(ui, betaID) {
 		t.Fatal(ui)
 	}
 }
@@ -140,8 +140,8 @@ func TestIntegrationDiffAttributeOnlyChange(t *testing.T) {
 	c.ok("backup", c.source)
 	second := latestRef(c.refs()).Session
 	oldSession, newSession := c.session(first), c.session(second)
-	want := "--- " + first[:8] + "  " + oldSession.Started + "  " + oldSession.Directory + "\n+++ " + second[:8] + "  " + newSession.Started + "  " + newSession.Directory + "\n~ metadata.txt  17 B\n"
-	if out := c.ok("diff", first[:8], second[:8]); !strings.HasPrefix(out, want) || !strings.Contains(out, "modified: ") || !strings.Contains(out, " -> 2025-01-02T03:04:05Z") || strings.Contains(out, "content: changed") {
+	want := "--- " + first[:8] + "  " + cliTimestamp(t, oldSession.Started) + "  " + oldSession.Directory + "\n+++ " + second[:8] + "  " + cliTimestamp(t, newSession.Started) + "  " + newSession.Directory + "\n~ metadata.txt  17 B\n"
+	if out := c.ok("diff", first[:8], second[:8]); !strings.HasPrefix(out, want) || !strings.Contains(out, "modified: ") || !strings.Contains(out, " -> "+cliTimestamp(t, "2025-01-02T03:04:05Z")) || strings.Contains(out, "content: changed") {
 		t.Fatalf("got %q, want %q", out, want)
 	}
 	// The interactive comparison uses exactly the same lines.

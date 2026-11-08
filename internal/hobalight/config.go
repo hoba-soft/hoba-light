@@ -49,8 +49,8 @@ func defaultConfigPath(binaryDirectory string) (string, error) {
 # "." stores backups beside this file; absolute paths are also supported.
 storage: .
 
-# Source directories. Relative paths use this configuration file's directory.
-# An empty list requires an explicit source: hl backup <directory>.
+# Source files or directories. Relative paths use this configuration file's directory.
+# An empty list requires an explicit source: hl backup <path>.
 # Example: directories: ["C:/Users/me/Documents", "./photos"]
 directories: []
 
@@ -64,6 +64,12 @@ exclude: []
 
 # gc permanently deletes objects after this many days in trash (positive integer).
 trash_retention_days: %d
+
+# Applied by gc per source. Keep sessions matching either rule.
+# 0 disables a rule; both 0 disable session retention.
+retention:
+  days: 0
+  sessions: 0
 `, defaultWorkers, defaultTrashRetentionDays)
 	return name, errors.Join(writeErr, f.Close())
 }
@@ -97,7 +103,7 @@ func loadConfigAt(name, binaryDirectory string) (Config, error) {
 	if err := yaml.Unmarshal(b, &fields); err != nil {
 		return c, err
 	}
-	for _, key := range []string{"storage", "directories", "workers", "exclude", "trash_retention_days"} {
+	for _, key := range []string{"storage", "directories", "workers", "exclude", "trash_retention_days", "retention"} {
 		c.sources[key] = "default"
 		if node, ok := fields[key]; ok && node.Tag != "!!null" {
 			c.sources[key] = "config"
@@ -125,6 +131,17 @@ func loadConfigAt(name, binaryDirectory string) (Config, error) {
 		if err != nil {
 			return c, fmt.Errorf("HOBALIGHT_TRASH_RETENTION_DAYS must be a positive integer: %w", err)
 		}
+	}
+	if value, ok := os.LookupEnv("HOBALIGHT_RETENTION"); ok {
+		c.Retention = Retention{}
+		d := yaml.NewDecoder(strings.NewReader(value))
+		d.KnownFields(true)
+		if err := d.Decode(&c.Retention); err != nil {
+			return c, fmt.Errorf("HOBALIGHT_RETENTION: %w", err)
+		}
+	}
+	if err := c.Retention.validate(); err != nil {
+		return c, err
 	}
 	if c.TrashRetentionDays < 1 || c.TrashRetentionDays > 365000 {
 		return c, errors.New("trash_retention_days must be between 1 and 365000")

@@ -18,7 +18,14 @@ func (s *Store) content(ctx context.Context, id, mode string, w io.Writer) error
 	if err != nil {
 		return err
 	}
-	if _, err = fmt.Fprintf(w, "File: %.8s  %s\nSize: %s\n", id, f.Path, displaySize(f.Size)); err != nil {
+	header := []string{fmt.Sprintf("File: %.8s  %s", id, f.Path), "Size: " + displaySize(f.Size)}
+	pinned, isViewer := w.(interface{ setContentHeader([]string) error })
+	if isViewer {
+		err = pinned.setContentHeader(header)
+	} else {
+		_, err = fmt.Fprintln(w, strings.Join(header, "\n"))
+	}
+	if err != nil {
 		return err
 	}
 	input, err := s.diffBlob(ctx, f)
@@ -34,7 +41,13 @@ func (s *Store) content(ctx context.Context, id, mode string, w io.Writer) error
 			mode = "hex"
 		}
 	}
-	if _, err = fmt.Fprintf(w, "Content (%s):\n", mode); err != nil {
+	header = append(header, fmt.Sprintf("Content (%s):", mode))
+	if isViewer {
+		err = pinned.setContentHeader(header)
+	} else {
+		_, err = fmt.Fprintln(w, header[len(header)-1])
+	}
+	if err != nil {
 		return err
 	}
 	records := 0
@@ -63,13 +76,18 @@ func (s *Store) content(ctx context.Context, id, mode string, w io.Writer) error
 			if e != nil {
 				return e
 			}
-			if err = writeContentRecord(w, record); err != nil {
+			if isViewer {
+				_, err = fmt.Fprintln(w, strings.TrimSuffix(record.data, "\n"))
+			} else {
+				err = writeContentRecord(w, record)
+			}
+			if err != nil {
 				return err
 			}
 		}
 		records++
 	}
-	if records == 0 {
+	if records == 0 && !isViewer {
 		_, err = fmt.Fprintln(w, "(empty file)")
 	}
 	return err

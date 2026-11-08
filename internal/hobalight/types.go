@@ -5,7 +5,8 @@ import (
 )
 
 type Config struct {
-	TrashRetentionDays int `yaml:"trash_retention_days,omitempty"`
+	Retention          Retention `yaml:"retention,omitempty"`
+	TrashRetentionDays int       `yaml:"trash_retention_days,omitempty"`
 	path               string
 	sources            map[string]string
 	Exclude            []string `yaml:"exclude,omitempty"`
@@ -25,6 +26,10 @@ type File struct {
 	Blob     string `yaml:"blob,omitempty"`
 }
 type Session struct {
+	Comment string `yaml:"comment,omitempty"`
+	Status  string `yaml:"status,omitempty"`
+	// Source identifies a single-file backup; Directory remains the restore root.
+	Source    string   `yaml:"source,omitempty"`
 	Version   string   `yaml:"version,omitempty"`
 	Platform  string   `yaml:"platform,omitempty"`
 	Directory string   `yaml:"directory"`
@@ -42,14 +47,19 @@ type ReferenceFile struct {
 const referenceFormat = 1
 
 type Reference struct {
-	Format    int    `yaml:"format,omitempty"`
-	Directory string `yaml:"directory"`
-	Started   string `yaml:"started"`
-	Session   string `yaml:"session"`
+	Comment   string   `yaml:"comment,omitempty"`
+	Status    string   `yaml:"status,omitempty"`
+	Errors    []string `yaml:"errors,omitempty"`
+	Format    int      `yaml:"format,omitempty"`
+	Directory string   `yaml:"directory"`
+	Started   string   `yaml:"started"`
+	Session   string   `yaml:"session"`
 	// nil means a legacy reference; a pointer to an empty slice means an indexed empty session.
 	Files *[]ReferenceFile `yaml:"files,omitempty"`
 }
 type Store struct {
+	retention          Retention
+	sessionDate        string
 	backend            storageBackend
 	trashRetentionDays int
 	sessionListings    map[string]Reference
