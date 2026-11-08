@@ -19,16 +19,9 @@ for platform in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64 
   done
 done
 (cd dist && sha256sum hobalight_* > SHA256SUMS)
-gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_COMMIT/pulls" \
-  --jq 'map(select(.merged_at != null and .base.ref == "main")) | sort_by(.merged_at) | last | .body // ""' |
-  awk '
-    /^## Release notes[[:space:]]*$/ { section = 1; next }
-    section && /^## / { section = 0 }
-    section { print }
-  ' > release-notes.txt
 if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
   gh release upload "$tag" dist/* --repo "$GITHUB_REPOSITORY" --clobber
 else
-  gh release create "$tag" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --target "$RELEASE_COMMIT" --title "Hoba Light $version" --notes-file release-notes.txt --draft
+  gh release create "$tag" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --target "$RELEASE_COMMIT" --title "Hoba Light $version" --notes "" --draft
 fi
-gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.txt --draft=false
+gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false

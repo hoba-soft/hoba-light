@@ -142,7 +142,6 @@ jobs:
     permissions:
       contents: write
       actions: read
-      pull-requests: read
     defaults:
       run:
         shell: bash
